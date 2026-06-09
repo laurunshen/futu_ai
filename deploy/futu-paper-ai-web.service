@@ -1,0 +1,15 @@
+[Unit]
+Description=Futu Paper AI Web Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/futu_ai
+ExecStart=/home/ec2-user/futu_ai/.venv/bin/python -m futu_paper_ai web --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

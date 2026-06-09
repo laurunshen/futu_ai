@@ -1,0 +1,15 @@
+[Unit]
+Description=Futu Paper AI Gemini Auto Loop
+After=network-online.target futu-paper-ai-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/futu_ai
+ExecStart=/home/ec2-user/futu_ai/.venv/bin/python -m futu_paper_ai ai-loop --execute
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
