@@ -21,6 +21,44 @@ ai-loop service       background systemd service
 - Keep `GEMINI_EXECUTE_MARKETS=US` until HK buying power is confirmed.
 - Keep this as paper trading only unless you deliberately redesign the system.
 
+## Current EC2 Layout
+
+The initial EC2 deployment uses:
+
+```text
+app repo    /home/ec2-user/futu_ai
+OpenD       /home/ec2-user/opend/current
+web         127.0.0.1:8787
+OpenD API   127.0.0.1:11111
+```
+
+Install or refresh the services:
+
+```bash
+sudo cp /home/ec2-user/futu_ai/deploy/futu-opend.service /etc/systemd/system/
+sudo cp /home/ec2-user/futu_ai/deploy/futu-paper-ai-web.service /etc/systemd/system/
+sudo cp /home/ec2-user/futu_ai/deploy/futu-paper-ai-loop.service /etc/systemd/system/
+sudo cp /home/ec2-user/futu_ai/deploy/start-futu-opend.sh /home/ec2-user/opend/start-futu-opend.sh
+sudo systemctl daemon-reload
+```
+
+Create `/home/ec2-user/opend/opend.env` for OpenD login when you are ready:
+
+```bash
+FUTU_OPEND_LOGIN_ACCOUNT=your_futu_id_or_email_or_phone
+FUTU_OPEND_LOGIN_PWD_MD5=your_32_char_md5_password_hash
+```
+
+Start order:
+
+```bash
+sudo systemctl enable --now futu-opend
+sudo systemctl enable --now futu-paper-ai-web
+sudo systemctl enable --now futu-paper-ai-loop
+```
+
+Only start `futu-paper-ai-loop` after `python -m futu_paper_ai doctor` reports OpenD as connected.
+
 ## Example Commands
 
 ```bash

@@ -1,0 +1,16 @@
+[Unit]
+Description=Futu OpenD
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/opend/current
+EnvironmentFile=-/home/ec2-user/opend/opend.env
+ExecStart=/usr/bin/env bash /home/ec2-user/opend/start-futu-opend.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
