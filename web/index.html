@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Futu Paper AI</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Futu Paper AI</h1>
+        <div class="subline">US / HK · SIMULATE</div>
+      </div>
+      <div class="status-strip" id="statusStrip">
+        <span class="status-dot muted"></span>
+        <span id="statusText">Checking</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="column">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>行情</h2>
+            <button class="icon-button" id="refreshSnapshot" title="刷新行情" aria-label="刷新行情">↻</button>
+          </div>
+          <div class="input-row">
+            <label for="codesInput">代码</label>
+            <input id="codesInput" value="US.AAPL,HK.00700" autocomplete="off">
+          </div>
+          <div class="quote-grid" id="quoteGrid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>账户</h2>
+            <div class="segmented" role="group" aria-label="账户市场">
+              <button class="segment active" data-account-market="US">US</button>
+              <button class="segment" data-account-market="HK">HK</button>
+            </div>
+          </div>
+          <div class="metric-grid" id="accountGrid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>持仓</h2>
+            <button class="icon-button" id="refreshPositions" title="刷新持仓" aria-label="刷新持仓">↻</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>代码</th>
+                  <th>数量</th>
+                  <th>市值</th>
+                  <th>盈亏</th>
+                </tr>
+              </thead>
+              <tbody id="positionsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="column">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>订单</h2>
+            <div class="segmented" role="group" aria-label="订单方向">
+              <button class="segment active" data-side="BUY">BUY</button>
+              <button class="segment" data-side="SELL">SELL</button>
+            </div>
+          </div>
+
+          <form id="orderForm" class="order-form">
+            <div class="field-grid">
+              <label>
+                代码
+                <input id="orderCode" value="US.AAPL" autocomplete="off">
+              </label>
+              <label>
+                类型
+                <select id="orderType">
+                  <option value="NORMAL">NORMAL</option>
+                  <option value="LIMIT">LIMIT</option>
+                  <option value="MARKET">MARKET</option>
+                </select>
+              </label>
+              <label>
+                数量
+                <input id="orderQty" type="number" min="0" step="1" value="1">
+              </label>
+              <label>
+                价格
+                <input id="orderPrice" type="number" min="0" step="0.01" value="289.65">
+              </label>
+            </div>
+            <label class="wide-field">
+              理由
+              <input id="orderReason" value="manual paper order" autocomplete="off">
+            </label>
+            <div class="button-row">
+              <button type="button" class="secondary" id="validateOrder">Dry-run</button>
+              <button type="button" class="danger" id="executeOrder">执行模拟单</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Gemini</h2>
+            <span class="pill">AUTO · PAPER</span>
+          </div>
+          <label class="wide-field">
+            消息源
+            <textarea id="newsNotes" rows="4" placeholder="可粘贴新闻、公告、社媒摘要；没有就留空"></textarea>
+          </label>
+          <label class="check-row">
+            <input id="aiExecute" type="checkbox" checked>
+            <span>允许本次通过风控后自动执行模拟单</span>
+          </label>
+          <button type="button" class="primary-wide" id="runGemini">Gemini 扫描一次</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>结果</h2>
+            <button class="icon-button" id="clearOutput" title="清空结果" aria-label="清空结果">×</button>
+          </div>
+          <pre id="outputBox">{}</pre>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>风控</h2>
+            <button class="icon-button" id="refreshConfig" title="刷新配置" aria-label="刷新配置">↻</button>
+          </div>
+          <div class="risk-list" id="riskList"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

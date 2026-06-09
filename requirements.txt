@@ -1,0 +1,2 @@
+futu-api>=9.3
+google-genai>=1.0

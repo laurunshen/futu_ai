@@ -1,0 +1,11 @@
+.venv/
+.runtime/
+data/decisions/
+data/state/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+dist/
+build/
+*.egg-info/
