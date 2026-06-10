@@ -4,6 +4,7 @@ const state = {
   side: "BUY",
   config: null,
   decisionEntries: [],
+  selectedDecisionIndex: null,
   decisionPage: 1,
   decisionTotalPages: 1,
   myWatchlistTimer: null,
@@ -447,11 +448,192 @@ function executionLabel(row) {
   return "未下单";
 }
 
+function detailText(value, fallback = "无") {
+  const text = fmt(value);
+  return `<p class="detail-text">${html(text === "-" ? fallback : text)}</p>`;
+}
+
+function detailList(items, fallback = "无") {
+  const rows = Array.isArray(items) ? items.filter((item) => item !== null && item !== undefined && String(item).trim()) : [];
+  if (!rows.length) return detailText(fallback);
+  return `
+    <ul class="detail-list">
+      ${rows.map((item) => `<li>${html(item)}</li>`).join("")}
+    </ul>
+  `;
+}
+
+function detailKvGrid(items) {
+  const rows = items.filter(([, value]) => value !== null && value !== undefined && value !== "");
+  if (!rows.length) return detailText("无");
+  return `
+    <div class="detail-kv-grid">
+      ${rows
+        .map(
+          ([label, value]) => `
+            <div class="detail-kv-item">
+              <div class="detail-kv-label">${html(label)}</div>
+              <div class="detail-kv-value">${html(value)}</div>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function detailSection(title, body) {
+  return `
+    <section class="detail-section">
+      <h3>${html(title)}</h3>
+      ${body}
+    </section>
+  `;
+}
+
+function compactText(value, limit = 220) {
+  const text = fmt(value);
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trim()}...`;
+}
+
+function renderDetailCandidates(candidates) {
+  const rows = Array.isArray(candidates) ? candidates.slice(0, 8) : [];
+  if (!rows.length) return detailText("无");
+  return `
+    <div class="detail-candidate-grid">
+      ${rows
+        .map((candidate) => {
+          const change = Number(candidate.change_pct ?? candidate.change_rate);
+          const cls = changeClass(change);
+          const changeText = Number.isFinite(change) ? `${change.toFixed(2)}%` : "-";
+          return `
+            <article class="detail-candidate">
+              <div class="detail-candidate-top">
+                <span class="detail-candidate-code">${html(candidate.code)}</span>
+                <span class="detail-candidate-change ${cls}">${html(changeText)}</span>
+              </div>
+              <div class="detail-candidate-meta">
+                <span>${html(candidate.name || candidate.watch_name || candidate.market || "-")}</span>
+                <span>${html(candidate.last_price)}</span>
+                <span>Vol ${html(candidate.volume)}</span>
+              </div>
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderDecisionDetail(row) {
+  const card = el("decisionDetailCard");
+  const status = el("decisionDetailStatus");
+  if (!card || !status) return;
+
+  if (!row) {
+    status.className = "detail-status";
+    status.textContent = "未选择";
+    card.innerHTML = `<div class="empty">未选择决策</div>`;
+    return;
+  }
+
+  const decision = row.decision || {};
+  const action = String(decision.action || "UNKNOWN").toLowerCase();
+  const blocked = Array.isArray(row.blocked_reasons) ? row.blocked_reasons : [];
+  const order = row.order || null;
+  const execution = row.execution || null;
+  const usage = row.gemini_usage || {};
+  const newsNotes = Array.isArray(row.news_notes) ? row.news_notes : [];
+  const outputTokens = (Number(usage.candidates_token_count) || 0) + (Number(usage.thoughts_token_count) || 0);
+
+  status.className = `detail-status ${html(action)}`;
+  status.textContent = `${decision.action || "UNKNOWN"} · ${fmt(decision.confidence)}%`;
+
+  card.innerHTML = `
+    <article class="detail-hero ${html(action)}">
+      <div class="detail-hero-top">
+        <div>
+          <div class="detail-title">${html(decision.code || "NONE")}</div>
+          <div class="detail-subtitle">${html(fmtTime(row.timestamp || row.ts))} · ${html(row.mode)} · ${html(executionLabel(row))}</div>
+        </div>
+        <span class="decision-action ${html(action)}">${html(decision.action || "UNKNOWN")}</span>
+      </div>
+    </article>
+
+    ${detailSection("决策理由", detailText(decision.reason))}
+    ${detailSection("证据", detailList(decision.evidence))}
+    ${detailSection(
+      "风险与失效条件",
+      detailKvGrid([
+        ["风险", decision.risk],
+        ["失效条件", decision.invalidation],
+        ["时间周期", decision.time_horizon],
+        ["最大模拟金额", decision.max_notional ? fmtUsd(Number(decision.max_notional)) : "0"],
+      ])
+    )}
+    ${blocked.length ? detailSection("阻止原因", `<div class="blocked-row">${blocked.map((item) => `<span>${html(item)}</span>`).join("")}</div>`) : ""}
+    ${detailSection(
+      "订单",
+      order
+        ? detailKvGrid([
+            ["方向", order.side],
+            ["代码", order.code],
+            ["数量", order.qty],
+            ["价格", order.price],
+            ["类型", order.order_type],
+            ["理由", order.reason],
+          ])
+        : detailText("未生成订单")
+    )}
+    ${detailSection(
+      "执行",
+      execution
+        ? detailKvGrid([
+            ["状态", execution.ok ? "OK" : "失败"],
+            ["模式", execution.mode],
+            ["订单号", execution.order_id || execution.data?.order_id],
+            ["消息", execution.message || execution.error],
+          ])
+        : detailText("未执行")
+    )}
+    ${detailSection("候选标的", renderDetailCandidates(row.candidates || []))}
+    ${detailSection("新闻摘要", detailList(newsNotes.slice(0, 6).map((item) => compactText(item))))}
+    ${detailSection(
+      "Gemini 用量",
+      detailKvGrid([
+        ["Input Tokens", usage.prompt_token_count],
+        ["Output Tokens", outputTokens || ""],
+        ["Total Tokens", usage.total_token_count],
+      ])
+    )}
+    ${decision.learning_note ? `<div class="detail-note">${html(decision.learning_note)}</div>` : ""}
+  `;
+}
+
+function selectDecision(index, { scroll = false } = {}) {
+  if (index < 0 || index >= state.decisionEntries.length) return;
+  state.selectedDecisionIndex = index;
+  document.querySelectorAll("[data-decision-index]").forEach((button) => {
+    const selected = Number(button.dataset.decisionIndex) === index;
+    button.closest(".decision-item")?.classList.toggle("selected", selected);
+  });
+  renderDecisionDetail(state.decisionEntries[index]);
+  if (scroll && window.matchMedia("(max-width: 920px)").matches) {
+    el("decisionDetailCard")?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+}
+
 function renderDecisions(rows) {
   const list = el("decisionList");
   if (!rows.length) {
     list.innerHTML = `<div class="empty">No decisions yet</div>`;
+    state.selectedDecisionIndex = null;
+    renderDecisionDetail(null);
     return;
+  }
+  if (!Number.isInteger(state.selectedDecisionIndex) || state.selectedDecisionIndex >= rows.length) {
+    state.selectedDecisionIndex = 0;
   }
   list.innerHTML = rows
     .map((row, index) => {
@@ -465,7 +647,7 @@ function renderDecisions(rows) {
         .map((item) => `<span>${html(item)}</span>`)
         .join("");
       return `
-        <article class="decision-item">
+        <article class="decision-item ${index === state.selectedDecisionIndex ? "selected" : ""}">
           <div class="decision-top">
             <div>
               <div class="decision-code">${html(decision.code || "NONE")}</div>
@@ -484,7 +666,7 @@ function renderDecisions(rows) {
           ${candidates ? `<div class="candidate-row">${candidates}</div>` : ""}
           ${blocked ? `<div class="blocked-row">${blocked}</div>` : ""}
           ${decision.learning_note ? `<div class="learning-note">${html(decision.learning_note)}</div>` : ""}
-          <button type="button" class="detail-button" data-decision-index="${index}">详情</button>
+          <button type="button" class="detail-button" data-decision-index="${index}">查看详情</button>
         </article>
       `;
     })
@@ -493,9 +675,10 @@ function renderDecisions(rows) {
   list.querySelectorAll("[data-decision-index]").forEach((button) => {
     button.addEventListener("click", () => {
       const index = Number(button.dataset.decisionIndex);
-      showOutput(state.decisionEntries[index] || {});
+      selectDecision(index, { scroll: true });
     });
   });
+  renderDecisionDetail(rows[state.selectedDecisionIndex]);
 }
 
 function renderDecisionPager(payload) {
@@ -602,26 +785,32 @@ function bindButtons() {
   el("refreshDecisions").addEventListener("click", refreshDecisions);
   el("decisionStart").addEventListener("change", () => {
     state.decisionPage = 1;
+    state.selectedDecisionIndex = null;
     refreshDecisions();
   });
   el("decisionEnd").addEventListener("change", () => {
     state.decisionPage = 1;
+    state.selectedDecisionIndex = null;
     refreshDecisions();
   });
   el("decisionAction").addEventListener("change", () => {
     state.decisionPage = 1;
+    state.selectedDecisionIndex = null;
     refreshDecisions();
   });
   el("decisionPageSize").addEventListener("change", () => {
     state.decisionPage = 1;
+    state.selectedDecisionIndex = null;
     refreshDecisions();
   });
   el("prevDecisionPage").addEventListener("click", () => {
     state.decisionPage = Math.max(1, state.decisionPage - 1);
+    state.selectedDecisionIndex = null;
     refreshDecisions();
   });
   el("nextDecisionPage").addEventListener("click", () => {
     state.decisionPage = Math.min(state.decisionTotalPages, state.decisionPage + 1);
+    state.selectedDecisionIndex = null;
     refreshDecisions();
   });
   el("refreshGeminiUsage").addEventListener("click", refreshGeminiUsage);

@@ -281,7 +281,6 @@ textarea {
   grid-template-columns: 1fr;
 }
 
-.tab-panel[data-tab-panel="decisions"] .decision-list,
 .tab-panel[data-tab-panel="news"] .signal-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -550,6 +549,12 @@ tr:last-child td {
   background: #fbfcfd;
 }
 
+.decision-item.selected {
+  border-color: rgba(28, 109, 208, 0.42);
+  background: #f7fbff;
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
 .signal-item {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -724,6 +729,189 @@ tr:last-child td {
   font-weight: 700;
 }
 
+.decision-detail-panel {
+  position: sticky;
+  top: 12px;
+}
+
+.detail-status {
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #e7eef6;
+  color: #113a63;
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.detail-status.buy {
+  background: rgba(8, 127, 91, 0.12);
+  color: var(--green);
+}
+
+.detail-status.sell {
+  background: rgba(201, 42, 42, 0.12);
+  color: var(--red);
+}
+
+.detail-status.hold {
+  background: rgba(178, 107, 0, 0.12);
+  color: var(--amber);
+}
+
+.decision-detail-card {
+  display: grid;
+  gap: 12px;
+}
+
+.detail-hero {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--blue);
+  border-radius: 8px;
+  padding: 12px;
+  background: #f7fbff;
+}
+
+.detail-hero.hold {
+  border-left-color: var(--amber);
+  background: #fffaf0;
+}
+
+.detail-hero.buy {
+  border-left-color: var(--green);
+  background: #f4fbf8;
+}
+
+.detail-hero.sell {
+  border-left-color: var(--red);
+  background: #fff6f6;
+}
+
+.detail-hero-top,
+.detail-chip-row,
+.detail-candidate-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detail-hero-top {
+  justify-content: space-between;
+}
+
+.detail-title {
+  font-size: 18px;
+  font-weight: 780;
+}
+
+.detail-subtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.detail-section {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.detail-section h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.detail-text {
+  margin: 8px 0 0;
+  color: var(--text);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.detail-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.detail-list li {
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.detail-kv-grid,
+.detail-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.detail-kv-item,
+.detail-candidate {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 9px;
+  min-width: 0;
+}
+
+.detail-kv-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.detail-kv-value {
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 720;
+  overflow-wrap: anywhere;
+}
+
+.detail-candidate-code {
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.detail-candidate-change {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.detail-candidate-change.up {
+  background: rgba(8, 127, 91, 0.12);
+  color: var(--green);
+}
+
+.detail-candidate-change.down {
+  background: rgba(201, 42, 42, 0.12);
+  color: var(--red);
+}
+
+.detail-candidate-change.flat {
+  background: #e7eef6;
+  color: #113a63;
+}
+
+.detail-candidate-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.detail-note {
+  border: 1px solid rgba(178, 107, 0, 0.24);
+  border-radius: 8px;
+  background: #fffaf0;
+  padding: 10px;
+  color: #6b4300;
+  font-size: 13px;
+}
+
 pre {
   min-height: 220px;
   max-height: 420px;
@@ -771,9 +959,12 @@ pre {
     grid-column: 1 / -1;
   }
 
-  .tab-panel[data-tab-panel="decisions"] .decision-list,
   .tab-panel[data-tab-panel="news"] .signal-list {
     grid-template-columns: 1fr;
+  }
+
+  .decision-detail-panel {
+    position: static;
   }
 
   .topbar {
@@ -827,6 +1018,11 @@ pre {
 
   .decision-tools {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-kv-grid,
+  .detail-candidate-grid {
+    grid-template-columns: 1fr;
   }
 }
 
