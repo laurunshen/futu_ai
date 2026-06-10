@@ -76,6 +76,14 @@ class GeminiConfig:
 
 
 @dataclass(frozen=True)
+class NewsConfig:
+    autonews_db_path: str
+    lookback_hours: int
+    min_impact: int
+    max_signals: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     opend_host: str
     opend_port: int
@@ -85,6 +93,7 @@ class AppConfig:
     account_index: int
     risk: RiskConfig
     gemini: GeminiConfig
+    news: NewsConfig
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -132,6 +141,12 @@ class AppConfig:
                 cooldown_minutes=_int_env("GEMINI_COOLDOWN_MINUTES", 60),
                 loop_interval_seconds=_int_env("GEMINI_LOOP_INTERVAL_SECONDS", 300),
                 candidate_count=_int_env("GEMINI_CANDIDATE_COUNT", 8),
+            ),
+            news=NewsConfig(
+                autonews_db_path=os.environ.get("AUTONEWS_DB_PATH", "").strip(),
+                lookback_hours=_int_env("AUTONEWS_LOOKBACK_HOURS", 24),
+                min_impact=_int_env("AUTONEWS_MIN_IMPACT", 60),
+                max_signals=_int_env("AUTONEWS_MAX_SIGNALS", 8),
             ),
         )
 

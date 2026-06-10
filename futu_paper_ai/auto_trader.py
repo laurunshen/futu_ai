@@ -12,6 +12,7 @@ from .config import AppConfig, PROJECT_ROOT
 from .futu_client import FutuPaperClient
 from .gemini_engine import GeminiDecisionEngine, GeminiTradeDecision
 from .models import OrderIntent, infer_market
+from .news_signals import load_news_signals
 from .watchlist import WatchItem, load_watchlist
 
 
@@ -24,6 +25,7 @@ class AutoTradeResult:
     mode: str
     decision: dict[str, Any]
     gemini_usage: dict[str, Any]
+    news_notes: list[str]
     candidates: list[dict[str, Any]]
     order: dict[str, Any] | None
     execution: dict[str, Any] | None
@@ -60,8 +62,12 @@ class AutoTrader:
         candidates = self._select_candidates(snapshots, limit=self.config.gemini.candidate_count)
         account = self._account_summary("US")
         positions = self._positions_all()
+        news_payload = load_news_signals(self.config.news)
+        news_notes = [str(note) for note in (notes or [])]
+        if news_payload.get("ok"):
+            news_notes.extend(str(note) for note in news_payload.get("notes") or [])
 
-        decision = self.engine.decide(candidates=candidates, positions=positions, account=account, notes=notes or [])
+        decision = self.engine.decide(candidates=candidates, positions=positions, account=account, notes=news_notes)
         order, blocked = self._build_order(decision, positions)
         execution = None
 
@@ -75,6 +81,7 @@ class AutoTrader:
             mode="execute" if execute else "dry_run",
             decision=decision.to_dict(),
             gemini_usage=self.engine.last_usage,
+            news_notes=news_notes,
             candidates=candidates,
             order=order.to_dict() if order else None,
             execution=execution,

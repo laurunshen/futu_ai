@@ -208,7 +208,8 @@ textarea {
 .metric-grid,
 .usage-grid,
 .risk-list,
-.decision-list {
+.decision-list,
+.signal-list {
   display: grid;
   gap: 10px;
 }
@@ -481,6 +482,51 @@ tr:last-child td {
   border-radius: 8px;
   padding: 12px;
   background: #fbfcfd;
+}
+
+.signal-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.signal-top,
+.signal-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.signal-top {
+  justify-content: space-between;
+}
+
+.signal-title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.signal-score {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(28, 109, 208, 0.1);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.signal-meta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.signal-direction {
+  margin-top: 8px;
+  font-size: 13px;
 }
 
 .decision-tools {

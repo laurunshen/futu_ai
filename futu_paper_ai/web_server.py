@@ -16,6 +16,7 @@ from .auto_trader import AutoTrader
 from .config import AppConfig, PROJECT_ROOT, public_config
 from .futu_client import FutuPaperClient, _load_futu
 from .models import OrderIntent
+from .news_signals import load_news_signals
 from .watchlist import add_user_watch, load_user_watchlist, load_watchlist, remove_user_watch
 
 
@@ -317,6 +318,8 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             elif path == "/api/gemini-usage":
                 date_text = self._query_one(query, "date", datetime.now().date().isoformat())
                 self._send_json(_gemini_usage_payload(self.config, date_text))
+            elif path == "/api/news-signals":
+                self._send_json(load_news_signals(self.config.news))
             else:
                 self._send_json({"ok": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:

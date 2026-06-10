@@ -178,6 +178,17 @@ async function refreshGeminiUsage() {
   }
 }
 
+async function refreshNewsSignals({ silent = false } = {}) {
+  try {
+    const payload = await api("/api/news-signals");
+    renderNewsSignals(payload);
+    if (!silent) showOutput(payload);
+  } catch (err) {
+    el("newsSignalList").innerHTML = `<div class="empty">News signals unavailable</div>`;
+    if (!silent) showOutput(err);
+  }
+}
+
 async function addMyWatch() {
   const codeInput = el("myWatchCode");
   const code = codeInput.value.trim().toUpperCase();
@@ -365,6 +376,40 @@ function renderGeminiUsage(payload) {
     .join("");
 }
 
+function renderNewsSignals(payload) {
+  const list = el("newsSignalList");
+  const signals = payload.signals || [];
+  if (!payload.enabled) {
+    list.innerHTML = `<div class="empty">AUTONEWS_DB_PATH is not set</div>`;
+    return;
+  }
+  if (!signals.length) {
+    list.innerHTML = `<div class="empty">${html(payload.message || "No recent high-impact signals")}</div>`;
+    return;
+  }
+  list.innerHTML = signals
+    .map((signal) => {
+      const tickers = (signal.tickers || []).slice(0, 5).join(", ") || "无明确标的";
+      const assets = (signal.asset_classes || []).slice(0, 4).join(", ") || signal.topic_name;
+      return `
+        <article class="signal-item">
+          <div class="signal-top">
+            <div class="signal-title">${html(signal.title)}</div>
+            <span class="signal-score">${html(signal.impact_score)}</span>
+          </div>
+          <div class="signal-meta">
+            <span>${html(fmtTime(signal.created_at))}</span>
+            <span>${html(tickers)}</span>
+            <span>${html(assets)}</span>
+          </div>
+          ${signal.direction ? `<div class="signal-direction">${html(signal.direction)}</div>` : ""}
+          ${signal.so_what ? `<div class="learning-note">${html(signal.so_what)}</div>` : ""}
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function executionLabel(row) {
   if (row.execution?.ok && row.execution?.mode === "paper_execute") return "已执行";
   if (row.execution?.ok && row.execution?.mode === "paper_dry_run") return "Dry-run";
@@ -487,6 +532,7 @@ async function runGemini() {
     showOutput(payload);
     await refreshDecisions();
     await refreshGeminiUsage();
+    await refreshNewsSignals({ silent: true });
     await refreshAccount();
     await refreshPositions();
   } catch (err) {
@@ -551,6 +597,7 @@ function bindButtons() {
     refreshDecisions();
   });
   el("refreshGeminiUsage").addEventListener("click", refreshGeminiUsage);
+  el("refreshNewsSignals").addEventListener("click", () => refreshNewsSignals());
   el("refreshConfig").addEventListener("click", refreshStatus);
   el("validateOrder").addEventListener("click", validateOrder);
   el("executeOrder").addEventListener("click", executeOrder);
@@ -568,6 +615,7 @@ async function init() {
   await refreshPositions();
   await refreshDecisions();
   await refreshGeminiUsage();
+  await refreshNewsSignals({ silent: true });
   state.myWatchlistTimer = window.setInterval(() => refreshMyWatchlist({ silent: true }), 20000);
 }
 

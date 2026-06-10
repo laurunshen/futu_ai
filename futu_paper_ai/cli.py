@@ -10,6 +10,7 @@ from .auto_trader import AutoTrader
 from .config import AppConfig, public_config
 from .futu_client import FutuPaperClient, _load_futu
 from .models import OrderIntent
+from .news_signals import load_news_signals
 from .watchlist import load_watchlist
 from .web_server import run_web_server
 
@@ -118,6 +119,13 @@ def cmd_watchlist(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_news_signals(_: argparse.Namespace) -> int:
+    config = AppConfig.from_env()
+    payload = load_news_signals(config.news)
+    _print_json(payload)
+    return 0 if payload.get("ok") else 2
+
+
 def cmd_ai_once(args: argparse.Namespace) -> int:
     config = AppConfig.from_env()
     execute = False if args.dry_run else args.execute or (config.gemini.auto_enabled and config.gemini.auto_execute)
@@ -176,6 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
     watchlist_parser = subparsers.add_parser("watchlist", help="Show the default AI watchlist")
     watchlist_parser.add_argument("--market", action="append", choices=["US", "HK", "CN"])
     watchlist_parser.set_defaults(func=cmd_watchlist)
+
+    news_parser = subparsers.add_parser("news-signals", help="Show recent autoNews signals passed to Gemini")
+    news_parser.set_defaults(func=cmd_news_signals)
 
     ai_once_parser = subparsers.add_parser("ai-once", help="Run one Gemini decision cycle")
     ai_once_parser.add_argument("--execute", action="store_true", help="Allow simulated execution if checks pass")

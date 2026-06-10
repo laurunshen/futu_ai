@@ -71,6 +71,20 @@ The auto loop observes the 100-code watchlist, selects a small candidate set
 from quote snapshots, asks Gemini for BUY / SELL / HOLD with reasons, and only
 submits paper orders after risk checks pass.
 
+If autoNews is running and writing its SQLite signal database, point this app at
+that database so every Gemini cycle receives recent high-impact news notes:
+
+```bash
+AUTONEWS_DB_PATH=/Users/liurunsheng/Documents/autoNews/news.db
+AUTONEWS_LOOKBACK_HOURS=24
+AUTONEWS_MIN_IMPACT=60
+AUTONEWS_MAX_SIGNALS=8
+python -m futu_paper_ai news-signals
+```
+
+`news-signals` is read-only. It shows the autoNews items that will be appended
+to Gemini's `notes` field during `ai-once` and `ai-loop`.
+
 ## Commands
 
 Validate an AI order intent without connecting to Futu:
