@@ -96,6 +96,52 @@ def _read_decisions(limit: int) -> list[dict[str, Any]]:
     return list(reversed(entries))
 
 
+def _read_decisions_page(
+    *, page: int, page_size: int, action: str = "ALL", date_start: str = "", date_end: str = ""
+) -> dict[str, Any]:
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    action = action.upper()
+    entries: list[dict[str, Any]] = []
+
+    if DECISION_LOG_ROOT.exists():
+        for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl")):
+            log_date = log_path.stem
+            if date_start and log_date < date_start:
+                continue
+            if date_end and log_date > date_end:
+                continue
+            for line in log_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                decision_action = str(entry.get("decision", {}).get("action", "")).upper()
+                if action != "ALL" and decision_action != action:
+                    continue
+                entry.setdefault("log_date", log_date)
+                entries.append(entry)
+
+    entries.sort(key=lambda item: str(item.get("timestamp") or item.get("ts") or ""), reverse=True)
+    total = len(entries)
+    total_pages = max(1, math.ceil(total / page_size))
+    page = min(page, total_pages)
+    start = (page - 1) * page_size
+    return {
+        "ok": True,
+        "count": len(entries[start : start + page_size]),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "entries": entries[start : start + page_size],
+    }
+
+
 def _read_decisions_for_date(date_text: str) -> list[dict[str, Any]]:
     log_path = DECISION_LOG_ROOT / f"{date_text}.jsonl"
     if not log_path.exists():
@@ -254,9 +300,20 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             elif path == "/api/my-watchlist":
                 self._send_json(self._my_watchlist_payload())
             elif path == "/api/decisions":
-                limit = self._query_int(query, "limit", 20)
-                entries = _read_decisions(limit)
-                self._send_json({"ok": True, "count": len(entries), "entries": entries})
+                page = self._query_int(query, "page", 1)
+                page_size = self._query_int(query, "page_size", self._query_int(query, "limit", 20))
+                action = self._query_one(query, "action", "ALL")
+                date_start = self._query_one(query, "date_start", "")
+                date_end = self._query_one(query, "date_end", "")
+                self._send_json(
+                    _read_decisions_page(
+                        page=page,
+                        page_size=page_size,
+                        action=action,
+                        date_start=date_start,
+                        date_end=date_end,
+                    )
+                )
             elif path == "/api/gemini-usage":
                 date_text = self._query_one(query, "date", datetime.now().date().isoformat())
                 self._send_json(_gemini_usage_payload(self.config, date_text))

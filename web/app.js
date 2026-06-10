@@ -3,6 +3,8 @@ const state = {
   side: "BUY",
   config: null,
   decisionEntries: [],
+  decisionPage: 1,
+  decisionTotalPages: 1,
   myWatchlistTimer: null,
 };
 
@@ -144,10 +146,22 @@ async function refreshMyWatchlist({ silent = false } = {}) {
 }
 
 async function refreshDecisions() {
+  const params = new URLSearchParams({
+    page: String(state.decisionPage),
+    page_size: el("decisionPageSize").value,
+    action: el("decisionAction").value,
+  });
+  const start = el("decisionStart").value;
+  const end = el("decisionEnd").value;
+  if (start) params.set("date_start", start);
+  if (end) params.set("date_end", end);
   try {
-    const payload = await api("/api/decisions?limit=20");
+    const payload = await api(`/api/decisions?${params.toString()}`);
     state.decisionEntries = payload.entries || [];
+    state.decisionPage = payload.page || 1;
+    state.decisionTotalPages = payload.total_pages || 1;
     renderDecisions(state.decisionEntries);
+    renderDecisionPager(payload);
   } catch (err) {
     el("decisionList").innerHTML = `<div class="empty">Decision history unavailable</div>`;
     showOutput(err);
@@ -411,6 +425,15 @@ function renderDecisions(rows) {
   });
 }
 
+function renderDecisionPager(payload) {
+  const total = payload.total || 0;
+  const page = payload.page || 1;
+  const totalPages = payload.total_pages || 1;
+  el("decisionPageInfo").textContent = `${page} / ${totalPages} · ${total}`;
+  el("prevDecisionPage").disabled = page <= 1;
+  el("nextDecisionPage").disabled = page >= totalPages;
+}
+
 function currentIntent() {
   return {
     code: el("orderCode").value.trim().toUpperCase(),
@@ -503,6 +526,30 @@ function bindButtons() {
   });
   el("refreshPositions").addEventListener("click", refreshPositions);
   el("refreshDecisions").addEventListener("click", refreshDecisions);
+  el("decisionStart").addEventListener("change", () => {
+    state.decisionPage = 1;
+    refreshDecisions();
+  });
+  el("decisionEnd").addEventListener("change", () => {
+    state.decisionPage = 1;
+    refreshDecisions();
+  });
+  el("decisionAction").addEventListener("change", () => {
+    state.decisionPage = 1;
+    refreshDecisions();
+  });
+  el("decisionPageSize").addEventListener("change", () => {
+    state.decisionPage = 1;
+    refreshDecisions();
+  });
+  el("prevDecisionPage").addEventListener("click", () => {
+    state.decisionPage = Math.max(1, state.decisionPage - 1);
+    refreshDecisions();
+  });
+  el("nextDecisionPage").addEventListener("click", () => {
+    state.decisionPage = Math.min(state.decisionTotalPages, state.decisionPage + 1);
+    refreshDecisions();
+  });
   el("refreshGeminiUsage").addEventListener("click", refreshGeminiUsage);
   el("refreshConfig").addEventListener("click", refreshStatus);
   el("validateOrder").addEventListener("click", validateOrder);

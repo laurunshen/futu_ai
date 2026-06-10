@@ -483,6 +483,40 @@ tr:last-child td {
   background: #fbfcfd;
 }
 
+.decision-tools {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.decision-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pager-button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.pager-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .decision-top,
 .decision-badges,
 .decision-meta,
@@ -645,5 +679,9 @@ pre {
 
   .button-row {
     grid-template-columns: 1fr;
+  }
+
+  .decision-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

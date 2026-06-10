@@ -149,6 +149,26 @@
             <h2>AI 决策</h2>
             <button class="icon-button" id="refreshDecisions" title="刷新决策" aria-label="刷新决策">↻</button>
           </div>
+          <div class="decision-tools">
+            <input id="decisionStart" type="date" aria-label="开始日期">
+            <input id="decisionEnd" type="date" aria-label="结束日期">
+            <select id="decisionAction" aria-label="操作类型">
+              <option value="ALL">ALL</option>
+              <option value="BUY">BUY</option>
+              <option value="SELL">SELL</option>
+              <option value="HOLD">HOLD</option>
+            </select>
+            <select id="decisionPageSize" aria-label="每页数量">
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+            </select>
+          </div>
+          <div class="decision-pager">
+            <button type="button" class="pager-button" id="prevDecisionPage" aria-label="上一页">‹</button>
+            <span id="decisionPageInfo">1 / 1 · 0</span>
+            <button type="button" class="pager-button" id="nextDecisionPage" aria-label="下一页">›</button>
+          </div>
           <div class="decision-list" id="decisionList"></div>
         </div>
 
