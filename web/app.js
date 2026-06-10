@@ -11,6 +11,7 @@ const state = {
   newsPayload: null,
   newsPage: 1,
   newsTotalPages: 1,
+  riskAllowedCodes: [],
   myWatchlistTimer: null,
 };
 
@@ -383,13 +384,60 @@ function renderRisk(config) {
     .join("");
 }
 
+function normalizeRiskCode(value) {
+  const text = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (!text) return "";
+  const hk = text.match(/^HK\.?(\d{1,5})$/);
+  if (hk) return `HK.${hk[1].padStart(5, "0")}`;
+  const us = text.match(/^US\.?([A-Z][A-Z0-9.\-]{0,9})$/);
+  if (us) return `US.${us[1]}`;
+  if (/^[A-Z][A-Z0-9.\-]{0,9}$/.test(text)) return `US.${text}`;
+  return text;
+}
+
+function renderRiskCodeList() {
+  const list = el("riskCodeList");
+  if (!state.riskAllowedCodes.length) {
+    list.innerHTML = `<div class="empty compact-empty">未配置白名单代码</div>`;
+    return;
+  }
+  list.innerHTML = state.riskAllowedCodes
+    .map(
+      (code) => `
+        <div class="risk-code-item">
+          <span>${html(code)}</span>
+          <button type="button" data-risk-code-remove="${html(code)}" title="删除" aria-label="删除 ${html(code)}">×</button>
+        </div>
+      `
+    )
+    .join("");
+  list.querySelectorAll("[data-risk-code-remove]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.riskAllowedCodes = state.riskAllowedCodes.filter((code) => code !== button.dataset.riskCodeRemove);
+      renderRiskCodeList();
+    });
+  });
+}
+
+function addRiskCode() {
+  const input = el("riskCodeInput");
+  const code = normalizeRiskCode(input.value);
+  if (!code) return;
+  if (!state.riskAllowedCodes.includes(code)) {
+    state.riskAllowedCodes = [...state.riskAllowedCodes, code].sort();
+  }
+  input.value = "";
+  renderRiskCodeList();
+}
+
 function renderRiskEditor(config) {
   if (!config?.risk) return;
   const risk = config.risk;
   el("riskRequireWhitelist").checked = Boolean(risk.require_whitelist);
   el("riskAllowSell").checked = Boolean(risk.allow_sell);
   el("riskAllowMarketOrders").checked = Boolean(risk.allow_market_orders);
-  el("riskAllowedCodes").value = (risk.allowed_codes || []).join(", ");
+  state.riskAllowedCodes = [...(risk.allowed_codes || [])].map(normalizeRiskCode).filter(Boolean).sort();
+  renderRiskCodeList();
   el("riskMaxOrderUS").value = risk.max_order_value?.US ?? "";
   el("riskMaxOrderHK").value = risk.max_order_value?.HK ?? "";
   el("riskMaxQtyUS").value = risk.max_qty?.US ?? "";
@@ -399,10 +447,7 @@ function renderRiskEditor(config) {
 function riskPayloadFromForm() {
   return {
     allowed_markets: ["US", "HK"],
-    allowed_codes: el("riskAllowedCodes").value
-      .split(/[,\n]/)
-      .map((item) => item.trim().toUpperCase())
-      .filter(Boolean),
+    allowed_codes: state.riskAllowedCodes,
     require_whitelist: el("riskRequireWhitelist").checked,
     allow_sell: el("riskAllowSell").checked,
     allow_market_orders: el("riskAllowMarketOrders").checked,
@@ -959,6 +1004,13 @@ function bindButtons() {
   });
   el("refreshConfig").addEventListener("click", refreshStatus);
   el("saveRiskConfig").addEventListener("click", saveRiskConfig);
+  el("addRiskCode").addEventListener("click", addRiskCode);
+  el("riskCodeInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addRiskCode();
+    }
+  });
   el("validateOrder").addEventListener("click", validateOrder);
   el("executeOrder").addEventListener("click", executeOrder);
   el("runGemini").addEventListener("click", runGemini);

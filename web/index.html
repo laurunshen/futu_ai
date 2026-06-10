@@ -29,7 +29,7 @@
     <main class="workspace">
       <section class="tab-panel active" data-tab-panel="overview">
         <div class="tab-grid">
-          <div class="panel span-4">
+          <div class="panel span-4 overview-account">
             <div class="panel-head">
               <h2>账户</h2>
               <div class="segmented" role="group" aria-label="账户市场">
@@ -40,7 +40,7 @@
             <div class="metric-grid" id="accountGrid"></div>
           </div>
 
-          <div class="panel span-8">
+          <div class="panel span-8 overview-gemini">
             <div class="panel-head">
               <h2>Gemini</h2>
               <span class="pill">AUTO · PAPER</span>
@@ -56,7 +56,7 @@
             <button type="button" class="primary-wide" id="runGemini">Gemini 扫描一次</button>
           </div>
 
-          <div class="panel span-7">
+          <div class="panel span-7 overview-order">
             <div class="panel-head">
               <h2>订单</h2>
               <div class="segmented" role="group" aria-label="订单方向">
@@ -99,7 +99,7 @@
             </form>
           </div>
 
-          <div class="panel span-5">
+          <div class="panel span-5 overview-positions">
             <div class="panel-head">
               <h2>持仓</h2>
               <button class="icon-button" id="refreshPositions" title="刷新持仓" aria-label="刷新持仓">↻</button>
@@ -119,7 +119,7 @@
             </div>
           </div>
 
-          <div class="panel span-12">
+          <div class="panel span-12 overview-risk">
             <div class="panel-head">
               <h2>风控</h2>
               <button class="icon-button" id="refreshConfig" title="刷新配置" aria-label="刷新配置">↻</button>
@@ -140,10 +140,14 @@
                   <span>允许市价单</span>
                 </label>
               </div>
-              <label class="wide-field">
-                白名单代码
-                <textarea id="riskAllowedCodes" rows="3" placeholder="US.AAPL, HK.00700"></textarea>
-              </label>
+              <div class="wide-field">
+                <span>白名单代码</span>
+                <div class="risk-code-add">
+                  <input id="riskCodeInput" placeholder="US.AAPL 或 HK.00700" autocomplete="off">
+                  <button type="button" class="secondary compact" id="addRiskCode">添加</button>
+                </div>
+                <div class="risk-code-list" id="riskCodeList"></div>
+              </div>
               <div class="field-grid">
                 <label>
                   US 单笔金额
