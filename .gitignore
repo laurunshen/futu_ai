@@ -6,6 +6,8 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+secrets/
+*.pem
 dist/
 build/
 *.egg-info/
