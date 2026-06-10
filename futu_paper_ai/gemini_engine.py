@@ -64,6 +64,7 @@ class GeminiTradeDecision:
 class GeminiDecisionEngine:
     def __init__(self, config: GeminiConfig):
         self.config = config
+        self.last_usage: dict[str, Any] = {}
 
     def decide(
         self,
@@ -73,6 +74,7 @@ class GeminiDecisionEngine:
         account: dict[str, Any],
         notes: list[str] | None = None,
     ) -> GeminiTradeDecision:
+        self.last_usage = {}
         if not self.config.api_key:
             return GeminiTradeDecision.hold("GEMINI_API_KEY is missing.")
         if not candidates:
@@ -95,7 +97,24 @@ class GeminiDecisionEngine:
                 response_schema=GeminiTradeDecisionModel,
             ),
         )
+        self.last_usage = self._usage_to_dict(getattr(response, "usage_metadata", None))
         return self._parse_response(response.text)
+
+    def _usage_to_dict(self, usage: Any) -> dict[str, Any]:
+        if usage is None:
+            return {}
+        if hasattr(usage, "model_dump"):
+            return {key: value for key, value in usage.model_dump().items() if value not in (None, [], {})}
+        if isinstance(usage, dict):
+            return {str(key): value for key, value in usage.items() if value not in (None, [], {})}
+        fields = (
+            "prompt_token_count",
+            "candidates_token_count",
+            "thoughts_token_count",
+            "tool_use_prompt_token_count",
+            "total_token_count",
+        )
+        return {field: getattr(usage, field) for field in fields if getattr(usage, field, None) is not None}
 
     def _parse_response(self, text: str) -> GeminiTradeDecision:
         try:

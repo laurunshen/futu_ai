@@ -5,6 +5,7 @@ import math
 import mimetypes
 import socket
 from collections import deque
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +21,11 @@ from .watchlist import add_user_watch, load_user_watchlist, load_watchlist, remo
 
 STATIC_ROOT = PROJECT_ROOT / "web"
 DECISION_LOG_ROOT = PROJECT_ROOT / "data" / "decisions"
+GEMINI_STANDARD_PRICES = {
+    "gemini-3.5-flash": {"input_per_1m": 1.50, "output_per_1m": 9.00},
+    "gemini-3-flash-preview": {"input_per_1m": 0.50, "output_per_1m": 3.00},
+    "gemini-3.1-flash-lite": {"input_per_1m": 0.25, "output_per_1m": 1.50},
+}
 
 
 def _jsonable(value: Any) -> Any:
@@ -90,6 +96,109 @@ def _read_decisions(limit: int) -> list[dict[str, Any]]:
     return list(reversed(entries))
 
 
+def _read_decisions_for_date(date_text: str) -> list[dict[str, Any]]:
+    log_path = DECISION_LOG_ROOT / f"{date_text}.jsonl"
+    if not log_path.exists():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+def _num(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _estimate_missing_usage(entry: dict[str, Any]) -> dict[str, int]:
+    prompt_payload = {
+        "candidates": entry.get("candidates", []),
+        "order": entry.get("order"),
+        "blocked_reasons": entry.get("blocked_reasons", []),
+    }
+    response_payload = entry.get("decision", {})
+    prompt_chars = len(json.dumps(prompt_payload, ensure_ascii=False, default=str))
+    response_chars = len(json.dumps(response_payload, ensure_ascii=False, default=str))
+    return {
+        "prompt_token_count": max(900, round(prompt_chars / 2.0) + 900),
+        "candidates_token_count": max(120, round(response_chars / 1.8)),
+        "thoughts_token_count": 250,
+    }
+
+
+def _usage_cost(input_tokens: int, output_tokens: int, price: dict[str, float]) -> float:
+    return (input_tokens / 1_000_000 * price["input_per_1m"]) + (
+        output_tokens / 1_000_000 * price["output_per_1m"]
+    )
+
+
+def _gemini_usage_payload(config: AppConfig, date_text: str) -> dict[str, Any]:
+    entries = _read_decisions_for_date(date_text)
+    model = config.gemini.model
+    price = GEMINI_STANDARD_PRICES.get(model, GEMINI_STANDARD_PRICES["gemini-3.5-flash"])
+    totals = {
+        "prompt_token_count": 0,
+        "candidates_token_count": 0,
+        "thoughts_token_count": 0,
+        "tool_use_prompt_token_count": 0,
+        "total_token_count": 0,
+    }
+    measured_calls = 0
+
+    for entry in entries:
+        usage = entry.get("gemini_usage") or {}
+        estimated = False
+        if not usage:
+            usage = _estimate_missing_usage(entry)
+            estimated = True
+        else:
+            measured_calls += 1
+
+        prompt_tokens = _num(usage.get("prompt_token_count")) + _num(usage.get("tool_use_prompt_token_count"))
+        output_tokens = _num(usage.get("candidates_token_count")) + _num(usage.get("thoughts_token_count"))
+        totals["prompt_token_count"] += _num(usage.get("prompt_token_count"))
+        totals["candidates_token_count"] += _num(usage.get("candidates_token_count"))
+        totals["thoughts_token_count"] += _num(usage.get("thoughts_token_count"))
+        totals["tool_use_prompt_token_count"] += _num(usage.get("tool_use_prompt_token_count"))
+        if usage.get("total_token_count") and not estimated:
+            totals["total_token_count"] += _num(usage.get("total_token_count"))
+        else:
+            totals["total_token_count"] += prompt_tokens + output_tokens
+
+    input_tokens = totals["prompt_token_count"] + totals["tool_use_prompt_token_count"]
+    output_tokens = totals["candidates_token_count"] + totals["thoughts_token_count"]
+    per_call_cost = _usage_cost(input_tokens, output_tokens, price) / len(entries) if entries else 0.0
+    cycles_per_day = max(1, round(86400 / max(config.gemini.loop_interval_seconds, 30)))
+    projected_daily_cost = per_call_cost * cycles_per_day
+
+    return {
+        "ok": True,
+        "date": date_text,
+        "model": model,
+        "calls": len(entries),
+        "measured_calls": measured_calls,
+        "estimated_calls": len(entries) - measured_calls,
+        "loop_interval_seconds": config.gemini.loop_interval_seconds,
+        "projected_calls_per_day": cycles_per_day,
+        "tokens": totals,
+        "price": price,
+        "paid_estimate_usd": round(_usage_cost(input_tokens, output_tokens, price), 6),
+        "projected_paid_usd_per_day": round(projected_daily_cost, 6),
+        "free_tier_cost_usd": 0.0,
+    }
+
+
 class PaperWebHandler(BaseHTTPRequestHandler):
     server_version = "FutuPaperAI/0.1"
 
@@ -148,6 +257,9 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 limit = self._query_int(query, "limit", 20)
                 entries = _read_decisions(limit)
                 self._send_json({"ok": True, "count": len(entries), "entries": entries})
+            elif path == "/api/gemini-usage":
+                date_text = self._query_one(query, "date", datetime.now().date().isoformat())
+                self._send_json(_gemini_usage_payload(self.config, date_text))
             else:
                 self._send_json({"ok": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:

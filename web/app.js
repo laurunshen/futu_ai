@@ -32,6 +32,12 @@ function fmtTime(value) {
   });
 }
 
+function fmtUsd(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "$0";
+  return `$${number.toFixed(number < 0.01 ? 4 : 2)}`;
+}
+
 function html(value) {
   return fmt(value)
     .replaceAll("&", "&amp;")
@@ -144,6 +150,16 @@ async function refreshDecisions() {
     renderDecisions(state.decisionEntries);
   } catch (err) {
     el("decisionList").innerHTML = `<div class="empty">Decision history unavailable</div>`;
+    showOutput(err);
+  }
+}
+
+async function refreshGeminiUsage() {
+  try {
+    const payload = await api("/api/gemini-usage");
+    renderGeminiUsage(payload);
+  } catch (err) {
+    el("geminiUsageGrid").innerHTML = `<div class="empty">Usage unavailable</div>`;
     showOutput(err);
   }
 }
@@ -309,6 +325,32 @@ function renderRisk(config) {
     .join("");
 }
 
+function renderGeminiUsage(payload) {
+  const tokens = payload.tokens || {};
+  const price = payload.price || {};
+  const measured = `${html(payload.measured_calls)} / ${html(payload.calls)}`;
+  const items = [
+    ["Today Calls", payload.calls],
+    ["Measured", measured],
+    ["Input Tokens", tokens.prompt_token_count],
+    ["Output Tokens", (Number(tokens.candidates_token_count) || 0) + (Number(tokens.thoughts_token_count) || 0)],
+    ["Paid Today", fmtUsd(payload.paid_estimate_usd)],
+    ["Paid / Day", fmtUsd(payload.projected_paid_usd_per_day)],
+    ["Input $/1M", price.input_per_1m],
+    ["Output $/1M", price.output_per_1m],
+  ];
+  el("geminiUsageGrid").innerHTML = items
+    .map(
+      ([label, value]) => `
+        <div class="metric">
+          <div class="metric-label">${label}</div>
+          <div class="metric-value">${html(value)}</div>
+        </div>
+      `
+    )
+    .join("");
+}
+
 function executionLabel(row) {
   if (row.execution?.ok && row.execution?.mode === "paper_execute") return "已执行";
   if (row.execution?.ok && row.execution?.mode === "paper_dry_run") return "Dry-run";
@@ -421,6 +463,7 @@ async function runGemini() {
     });
     showOutput(payload);
     await refreshDecisions();
+    await refreshGeminiUsage();
     await refreshAccount();
     await refreshPositions();
   } catch (err) {
@@ -460,6 +503,7 @@ function bindButtons() {
   });
   el("refreshPositions").addEventListener("click", refreshPositions);
   el("refreshDecisions").addEventListener("click", refreshDecisions);
+  el("refreshGeminiUsage").addEventListener("click", refreshGeminiUsage);
   el("refreshConfig").addEventListener("click", refreshStatus);
   el("validateOrder").addEventListener("click", validateOrder);
   el("executeOrder").addEventListener("click", executeOrder);
@@ -476,6 +520,7 @@ async function init() {
   await refreshAccount();
   await refreshPositions();
   await refreshDecisions();
+  await refreshGeminiUsage();
   state.myWatchlistTimer = window.setInterval(() => refreshMyWatchlist({ silent: true }), 20000);
 }
 

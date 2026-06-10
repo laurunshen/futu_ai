@@ -22,7 +22,7 @@
       <section class="column">
         <div class="panel">
           <div class="panel-head">
-            <h2>行情</h2>
+            <h2>临时行情</h2>
             <button class="icon-button" id="refreshSnapshot" title="刷新行情" aria-label="刷新行情">↻</button>
           </div>
           <div class="input-row">
@@ -34,7 +34,7 @@
 
         <div class="panel">
           <div class="panel-head">
-            <h2>自选</h2>
+            <h2>自选行情</h2>
             <button class="icon-button" id="refreshMyWatchlist" title="刷新自选" aria-label="刷新自选">↻</button>
           </div>
           <div class="watch-add-row">
@@ -134,6 +134,14 @@
             <span>允许本次通过风控后自动执行模拟单</span>
           </label>
           <button type="button" class="primary-wide" id="runGemini">Gemini 扫描一次</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Gemini 用量</h2>
+            <button class="icon-button" id="refreshGeminiUsage" title="刷新用量" aria-label="刷新用量">↻</button>
+          </div>
+          <div class="usage-grid" id="geminiUsageGrid"></div>
         </div>
 
         <div class="panel">

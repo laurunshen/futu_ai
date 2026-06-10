@@ -23,6 +23,7 @@ class AutoTradeResult:
     ok: bool
     mode: str
     decision: dict[str, Any]
+    gemini_usage: dict[str, Any]
     candidates: list[dict[str, Any]]
     order: dict[str, Any] | None
     execution: dict[str, Any] | None
@@ -73,6 +74,7 @@ class AutoTrader:
             ok=not blocked and (execution is None or bool(execution.get("ok"))),
             mode="execute" if execute else "dry_run",
             decision=decision.to_dict(),
+            gemini_usage=self.engine.last_usage,
             candidates=candidates,
             order=order.to_dict() if order else None,
             execution=execution,

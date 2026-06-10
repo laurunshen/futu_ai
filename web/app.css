@@ -206,6 +206,7 @@ textarea {
 .quote-grid,
 .watch-grid,
 .metric-grid,
+.usage-grid,
 .risk-list,
 .decision-list {
   display: grid;
@@ -349,6 +350,10 @@ textarea {
 }
 
 .metric-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.usage-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -628,6 +633,7 @@ pre {
   .quote-grid,
   .watch-grid,
   .metric-grid,
+  .usage-grid,
   .field-grid,
   .risk-list {
     grid-template-columns: 1fr;
