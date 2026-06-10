@@ -53,7 +53,6 @@ PY
 
 args=(
   "-cfg_file=${runtime_cfg}"
-  "-console=0"
 )
 
 exec ./FutuOpenD "${args[@]}"
