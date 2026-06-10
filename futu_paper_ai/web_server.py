@@ -4,6 +4,7 @@ import json
 import math
 import mimetypes
 import socket
+from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +19,7 @@ from .watchlist import load_watchlist
 
 
 STATIC_ROOT = PROJECT_ROOT / "web"
+DECISION_LOG_ROOT = PROJECT_ROOT / "data" / "decisions"
 
 
 def _jsonable(value: Any) -> Any:
@@ -66,6 +68,26 @@ def _doctor_payload(config: AppConfig) -> dict[str, Any]:
 
     checks.append({"name": "Paper", "ok": True, "details": "TrdEnv.SIMULATE"})
     return {"ok": all(check["ok"] for check in checks), "config": public_config(config), "checks": checks}
+
+
+def _read_decisions(limit: int) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 100))
+    if not DECISION_LOG_ROOT.exists():
+        return []
+
+    entries: deque[dict[str, Any]] = deque(maxlen=limit)
+    for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl")):
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict):
+                entry.setdefault("log_date", log_path.stem)
+                entries.append(entry)
+    return list(reversed(entries))
 
 
 class PaperWebHandler(BaseHTTPRequestHandler):
@@ -120,6 +142,10 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 markets = set(self._query_list(query, "markets")) if query.get("markets") else None
                 items = load_watchlist(markets=markets)
                 self._send_json({"ok": True, "count": len(items), "items": [item.__dict__ for item in items]})
+            elif path == "/api/decisions":
+                limit = self._query_int(query, "limit", 20)
+                entries = _read_decisions(limit)
+                self._send_json({"ok": True, "count": len(entries), "entries": entries})
             else:
                 self._send_json({"ok": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:
@@ -182,6 +208,15 @@ class PaperWebHandler(BaseHTTPRequestHandler):
         if not codes:
             raise ValueError(f"Missing query parameter: {key}")
         return codes
+
+    def _query_int(self, query: dict[str, list[str]], key: str, default: int) -> int:
+        values = query.get(key)
+        if not values:
+            return default
+        try:
+            return int(values[0])
+        except ValueError as exc:
+            raise ValueError(f"Invalid integer query parameter: {key}") from exc
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))

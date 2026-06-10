@@ -205,7 +205,8 @@ textarea {
 
 .quote-grid,
 .metric-grid,
-.risk-list {
+.risk-list,
+.decision-list {
   display: grid;
   gap: 10px;
 }
@@ -376,6 +377,98 @@ tr:last-child td {
   padding: 4px 8px;
   font-size: 12px;
   font-weight: 740;
+}
+
+.decision-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.decision-top,
+.decision-badges,
+.decision-meta,
+.candidate-row,
+.blocked-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.decision-top {
+  justify-content: space-between;
+}
+
+.decision-code {
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.decision-time,
+.decision-meta,
+.learning-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.decision-action,
+.decision-confidence,
+.candidate-chip,
+.blocked-row span {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.decision-action.hold {
+  background: rgba(178, 107, 0, 0.12);
+  color: var(--amber);
+}
+
+.decision-action.buy {
+  background: rgba(8, 127, 91, 0.12);
+  color: var(--green);
+}
+
+.decision-action.sell {
+  background: rgba(201, 42, 42, 0.12);
+  color: var(--red);
+}
+
+.decision-confidence,
+.candidate-chip {
+  background: #e7eef6;
+  color: #113a63;
+}
+
+.decision-reason {
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.candidate-row,
+.blocked-row,
+.learning-note {
+  margin-top: 8px;
+}
+
+.blocked-row span {
+  background: rgba(201, 42, 42, 0.08);
+  color: var(--red);
+}
+
+.detail-button {
+  min-height: 32px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
 }
 
 pre {

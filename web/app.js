@@ -2,6 +2,7 @@ const state = {
   accountMarket: "US",
   side: "BUY",
   config: null,
+  decisionEntries: [],
 };
 
 const el = (id) => document.getElementById(id);
@@ -16,6 +17,18 @@ function fmt(value) {
     return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
   }
   return String(value);
+}
+
+function fmtTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fmt(value);
+  return date.toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function html(value) {
@@ -90,6 +103,17 @@ async function refreshPositions() {
     renderPositions(payload.data || []);
     showOutput(payload);
   } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function refreshDecisions() {
+  try {
+    const payload = await api("/api/decisions?limit=20");
+    state.decisionEntries = payload.entries || [];
+    renderDecisions(state.decisionEntries);
+  } catch (err) {
+    el("decisionList").innerHTML = `<div class="empty">Decision history unavailable</div>`;
     showOutput(err);
   }
 }
@@ -182,6 +206,66 @@ function renderRisk(config) {
     .join("");
 }
 
+function executionLabel(row) {
+  if (row.execution?.ok && row.execution?.mode === "paper_execute") return "已执行";
+  if (row.execution?.ok && row.execution?.mode === "paper_dry_run") return "Dry-run";
+  if (row.execution && row.execution.ok === false) return "执行失败";
+  if ((row.blocked_reasons || []).length) return "已阻止";
+  if (row.order) return "待执行";
+  return "未下单";
+}
+
+function renderDecisions(rows) {
+  const list = el("decisionList");
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">No decisions yet</div>`;
+    return;
+  }
+  list.innerHTML = rows
+    .map((row, index) => {
+      const decision = row.decision || {};
+      const action = String(decision.action || "UNKNOWN").toLowerCase();
+      const candidates = (row.candidates || [])
+        .slice(0, 3)
+        .map((item) => `<span class="candidate-chip">${html(item.code)} ${html(item.change_pct)}%</span>`)
+        .join("");
+      const blocked = (row.blocked_reasons || [])
+        .map((item) => `<span>${html(item)}</span>`)
+        .join("");
+      return `
+        <article class="decision-item">
+          <div class="decision-top">
+            <div>
+              <div class="decision-code">${html(decision.code || "NONE")}</div>
+              <div class="decision-time">${html(fmtTime(row.timestamp || row.ts))} · ${html(row.mode)}</div>
+            </div>
+            <div class="decision-badges">
+              <span class="decision-action ${html(action)}">${html(decision.action || "UNKNOWN")}</span>
+              <span class="decision-confidence">${html(decision.confidence)}%</span>
+            </div>
+          </div>
+          <p class="decision-reason">${html(decision.reason)}</p>
+          <div class="decision-meta">
+            <span>${html(executionLabel(row))}</span>
+            ${row.order ? `<span>${html(row.order.side)} ${html(row.order.qty)} @ ${html(row.order.price)}</span>` : ""}
+          </div>
+          ${candidates ? `<div class="candidate-row">${candidates}</div>` : ""}
+          ${blocked ? `<div class="blocked-row">${blocked}</div>` : ""}
+          ${decision.learning_note ? `<div class="learning-note">${html(decision.learning_note)}</div>` : ""}
+          <button type="button" class="detail-button" data-decision-index="${index}">详情</button>
+        </article>
+      `;
+    })
+    .join("");
+
+  list.querySelectorAll("[data-decision-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.decisionIndex);
+      showOutput(state.decisionEntries[index] || {});
+    });
+  });
+}
+
 function currentIntent() {
   return {
     code: el("orderCode").value.trim().toUpperCase(),
@@ -233,6 +317,7 @@ async function runGemini() {
       body: JSON.stringify({ execute: el("aiExecute").checked, notes }),
     });
     showOutput(payload);
+    await refreshDecisions();
     await refreshAccount();
     await refreshPositions();
   } catch (err) {
@@ -263,6 +348,7 @@ function bindSegments() {
 function bindButtons() {
   el("refreshSnapshot").addEventListener("click", refreshSnapshot);
   el("refreshPositions").addEventListener("click", refreshPositions);
+  el("refreshDecisions").addEventListener("click", refreshDecisions);
   el("refreshConfig").addEventListener("click", refreshStatus);
   el("validateOrder").addEventListener("click", validateOrder);
   el("executeOrder").addEventListener("click", executeOrder);
@@ -277,6 +363,7 @@ async function init() {
   await refreshSnapshot();
   await refreshAccount();
   await refreshPositions();
+  await refreshDecisions();
 }
 
 init();
