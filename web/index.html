@@ -24,6 +24,7 @@
       <button type="button" class="tab-button" data-tab="trade" aria-selected="false">交易</button>
       <button type="button" class="tab-button" data-tab="decisions" aria-selected="false">AI 决策</button>
       <button type="button" class="tab-button" data-tab="news" aria-selected="false">新闻</button>
+      <button type="button" class="tab-button" data-tab="debug" aria-selected="false">调试</button>
     </nav>
 
     <main class="workspace">
@@ -53,20 +54,12 @@
             <div class="usage-grid" id="geminiUsageGrid"></div>
           </div>
 
-          <div class="panel span-5">
+          <div class="panel span-12">
             <div class="panel-head">
               <h2>风控</h2>
               <button class="icon-button" id="refreshConfig" title="刷新配置" aria-label="刷新配置">↻</button>
             </div>
             <div class="risk-list" id="riskList"></div>
-          </div>
-
-          <div class="panel span-7">
-            <div class="panel-head">
-              <h2>结果</h2>
-              <button class="icon-button" id="clearOutput" title="清空结果" aria-label="清空结果">×</button>
-            </div>
-            <pre id="outputBox">{}</pre>
           </div>
         </div>
       </section>
@@ -226,6 +219,16 @@
             <button class="icon-button" id="refreshNewsSignals" title="刷新新闻信号" aria-label="刷新新闻信号">↻</button>
           </div>
           <div class="signal-list" id="newsSignalList"></div>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="debug">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>调试输出</h2>
+            <button class="icon-button" id="clearOutput" title="清空输出" aria-label="清空输出">×</button>
+          </div>
+          <pre id="outputBox">{}</pre>
         </div>
       </section>
     </main>
