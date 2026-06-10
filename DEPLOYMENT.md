@@ -32,6 +32,39 @@ web         127.0.0.1:8787
 OpenD API   127.0.0.1:11111
 ```
 
+## autoNews Integration On Server
+
+Do not reuse the Mac path from local `.env`. Deploy autoNews on the server and
+let both services share one server-side SQLite file.
+
+Recommended EC2 layout:
+
+```text
+futu app      /home/ec2-user/futu_ai
+autoNews app  /home/ec2-user/autoNews
+signal db     /home/ec2-user/news-data/news.db
+```
+
+Set autoNews `config.local.ini`:
+
+```ini
+[SETTINGS]
+db_path = /home/ec2-user/news-data/news.db
+```
+
+Set `/home/ec2-user/futu_ai/.env`:
+
+```bash
+AUTONEWS_DB_PATH=/home/ec2-user/news-data/news.db
+AUTONEWS_LOOKBACK_HOURS=24
+AUTONEWS_MIN_IMPACT=60
+AUTONEWS_MAX_SIGNALS=8
+```
+
+With this layout there is no code change and no local path migration. autoNews
+writes signals into the shared database; `futu-paper-ai` reads the same file and
+passes recent high-impact signals into Gemini.
+
 Install or refresh the services:
 
 ```bash

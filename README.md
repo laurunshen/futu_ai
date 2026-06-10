@@ -72,7 +72,9 @@ from quote snapshots, asks Gemini for BUY / SELL / HOLD with reasons, and only
 submits paper orders after risk checks pass.
 
 If autoNews is running and writing its SQLite signal database, point this app at
-that database so every Gemini cycle receives recent high-impact news notes:
+that database with `AUTONEWS_DB_PATH` so every Gemini cycle receives recent
+high-impact news notes. This value is environment-specific: use a local path on
+your Mac and a server path on EC2.
 
 ```bash
 AUTONEWS_DB_PATH=/Users/liurunsheng/Documents/autoNews/news.db
