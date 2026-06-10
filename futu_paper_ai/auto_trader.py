@@ -59,10 +59,27 @@ class AutoTrader:
         execute = self.config.gemini.auto_execute if execute is None else execute
         watchlist = load_watchlist(markets=self.config.gemini.observe_markets)
         snapshots = self._snapshot_watchlist(watchlist)
+        watch_codes = [item.code for item in watchlist]
         candidates = self._select_candidates(snapshots, limit=self.config.gemini.candidate_count)
         account = self._account_summary("US")
         positions = self._positions_all()
-        news_payload = load_news_signals(self.config.news)
+        news_payload = load_news_signals(
+            self.config.news,
+            focus_codes=watch_codes,
+            candidate_codes=[str(candidate.get("code")) for candidate in candidates],
+        )
+        news_boosts = self._news_candidate_boosts(news_payload, watch_codes)
+        if news_boosts:
+            candidates = self._select_candidates(
+                snapshots,
+                limit=self.config.gemini.candidate_count,
+                priority_scores=news_boosts,
+            )
+            news_payload = load_news_signals(
+                self.config.news,
+                focus_codes=watch_codes,
+                candidate_codes=[str(candidate.get("code")) for candidate in candidates],
+            )
         news_notes = [str(note) for note in (notes or [])]
         if news_payload.get("ok"):
             news_notes.extend(str(note) for note in news_payload.get("notes") or [])
@@ -134,9 +151,16 @@ class AutoTrader:
             enriched.append(_clean(row))
         return enriched
 
-    def _select_candidates(self, rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    def _select_candidates(
+        self,
+        rows: list[dict[str, Any]],
+        limit: int,
+        priority_scores: dict[str, float] | None = None,
+    ) -> list[dict[str, Any]]:
         scored = []
+        priority_scores = priority_scores or {}
         for row in rows:
+            code = str(row.get("code", "")).upper()
             last_price = self._num(row.get("last_price"))
             prev_close = self._num(row.get("prev_close_price"))
             turnover = self._num(row.get("turnover"))
@@ -148,9 +172,12 @@ class AutoTrader:
             score = abs(change_pct) * 2.8 + amplitude * 0.8 + max(volume_ratio - 1, 0) * 4
             if turnover > 0:
                 score += min(math.log10(turnover), 12) * 0.35
+            news_boost = priority_scores.get(code, 0)
+            if news_boost:
+                score += 500 + news_boost * 5
             scored.append(
                 {
-                    "code": row.get("code"),
+                    "code": code or row.get("code"),
                     "name": row.get("name") or row.get("watch_name"),
                     "sector": row.get("watch_sector"),
                     "market": row.get("market"),
@@ -164,10 +191,27 @@ class AutoTrader:
                     "turnover": turnover,
                     "lot_size": self._num(row.get("lot_size")) or 1,
                     "score": round(score, 3),
+                    "news_boost": round(news_boost, 3),
                 }
             )
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:limit]
+
+    def _news_candidate_boosts(self, news_payload: dict[str, Any], watch_codes: list[str]) -> dict[str, float]:
+        watch_code_set = {code.upper() for code in watch_codes}
+        boosts: dict[str, float] = {}
+        if not news_payload.get("ok"):
+            return boosts
+        for signal in news_payload.get("signals") or []:
+            impact = self._num(signal.get("impact_score"))
+            if impact <= 0:
+                continue
+            codes = set()
+            codes.update(str(code).upper() for code in signal.get("matched_codes") or [])
+            codes.update(str(code).upper() for code in signal.get("normalized_tickers") or [])
+            for code in codes & watch_code_set:
+                boosts[code] = max(boosts.get(code, 0), impact)
+        return boosts
 
     def _account_summary(self, market: str) -> dict[str, Any]:
         currency = "USD" if market == "US" else "HKD"

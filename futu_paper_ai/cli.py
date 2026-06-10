@@ -119,9 +119,9 @@ def cmd_watchlist(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_news_signals(_: argparse.Namespace) -> int:
+def cmd_news_signals(args: argparse.Namespace) -> int:
     config = AppConfig.from_env()
-    payload = load_news_signals(config.news)
+    payload = load_news_signals(config.news, focus_codes=args.code or [], candidate_codes=args.candidate or [])
     _print_json(payload)
     return 0 if payload.get("ok") else 2
 
@@ -186,6 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     watchlist_parser.set_defaults(func=cmd_watchlist)
 
     news_parser = subparsers.add_parser("news-signals", help="Show recent autoNews signals passed to Gemini")
+    news_parser.add_argument("--code", action="append", help="Observed Futu code, e.g. US.AAPL HK.00700")
+    news_parser.add_argument("--candidate", action="append", help="Current candidate code, prioritized over watchlist")
     news_parser.set_defaults(func=cmd_news_signals)
 
     ai_once_parser = subparsers.add_parser("ai-once", help="Run one Gemini decision cycle")

@@ -71,6 +71,18 @@ The auto loop observes the 100-code watchlist, selects a small candidate set
 from quote snapshots, asks Gemini for BUY / SELL / HOLD with reasons, and only
 submits paper orders after risk checks pass.
 
+Candidate selection is two-stage:
+
+1. Rank the 100-code watchlist by market activity:
+   `abs(change_pct) * 2.8 + amplitude * 0.8 + max(volume_ratio - 1, 0) * 4 + log10(turnover) * 0.35`.
+2. If recent autoNews signals match a watchlist ticker, boost that ticker into
+   the candidate set so Gemini sees both the relevant news and the matching
+   quote snapshot.
+
+autoNews notes are filtered by relevance before they reach Gemini: current
+candidate matches first, then watchlist matches, then high-impact macro signals.
+Unmatched single-stock news is ignored.
+
 If autoNews is running and writing its SQLite signal database, point this app at
 that database with `AUTONEWS_DB_PATH` so every Gemini cycle receives recent
 high-impact news notes. This value is environment-specific: use a local path on

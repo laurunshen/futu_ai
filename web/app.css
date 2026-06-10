@@ -492,6 +492,7 @@ tr:last-child td {
 }
 
 .signal-top,
+.signal-badges,
 .signal-meta {
   display: flex;
   align-items: center;
@@ -514,6 +515,15 @@ tr:last-child td {
   padding: 3px 8px;
   background: rgba(28, 109, 208, 0.1);
   color: var(--blue);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.signal-match {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #e7eef6;
+  color: #113a63;
   font-size: 12px;
   font-weight: 740;
 }

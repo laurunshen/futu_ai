@@ -391,11 +391,16 @@ function renderNewsSignals(payload) {
     .map((signal) => {
       const tickers = (signal.tickers || []).slice(0, 5).join(", ") || "无明确标的";
       const assets = (signal.asset_classes || []).slice(0, 4).join(", ") || signal.topic_name;
+      const matched = (signal.matched_codes || []).join(", ");
+      const match = matched ? `${signal.match_type}: ${matched}` : signal.match_type;
       return `
         <article class="signal-item">
           <div class="signal-top">
             <div class="signal-title">${html(signal.title)}</div>
-            <span class="signal-score">${html(signal.impact_score)}</span>
+            <div class="signal-badges">
+              <span class="signal-match">${html(match)}</span>
+              <span class="signal-score">${html(signal.impact_score)}</span>
+            </div>
           </div>
           <div class="signal-meta">
             <span>${html(fmtTime(signal.created_at))}</span>
