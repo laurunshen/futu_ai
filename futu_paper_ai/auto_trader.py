@@ -26,6 +26,7 @@ class AutoTradeResult:
     decision: dict[str, Any]
     gemini_usage: dict[str, Any]
     news_notes: list[str]
+    news_signals: list[dict[str, Any]]
     candidates: list[dict[str, Any]]
     order: dict[str, Any] | None
     execution: dict[str, Any] | None
@@ -99,6 +100,7 @@ class AutoTrader:
             decision=decision.to_dict(),
             gemini_usage=self.engine.last_usage,
             news_notes=news_notes,
+            news_signals=[dict(signal) for signal in (news_payload.get("signals") or [])],
             candidates=candidates,
             order=order.to_dict() if order else None,
             execution=execution,

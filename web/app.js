@@ -660,6 +660,86 @@ function compactText(value, limit = 220) {
   return `${text.slice(0, limit).trim()}...`;
 }
 
+function safeUrl(value) {
+  const text = String(value || "").trim();
+  return /^https?:\/\//i.test(text) ? text : "";
+}
+
+function parseLegacyNewsNote(note, index) {
+  const text = String(note || "");
+  const readPart = (key) => {
+    const match = text.match(new RegExp(`${key}=([^|]+)`));
+    return match ? match[1].trim() : "";
+  };
+  const readToken = (key) => {
+    const match = text.match(new RegExp(`${key}=([^|\\s]+)`));
+    return match ? match[1].trim() : "";
+  };
+  return {
+    id: `legacy-${index}`,
+    title: readPart("title") || compactText(text, 90),
+    summary: readPart("summary") || text,
+    so_what: readPart("so_what"),
+    impact_score: readToken("impact"),
+    confidence: readToken("confidence"),
+    tickers: readPart("tickers") ? readPart("tickers").split(",").map((item) => item.trim()).filter(Boolean) : [],
+    matched_codes: [],
+    match_type: readToken("match") || "note",
+    affected_markets: readPart("markets") ? readPart("markets").split(",").map((item) => item.trim()).filter(Boolean) : [],
+    asset_classes: readPart("assets") ? readPart("assets").split(",").map((item) => item.trim()).filter(Boolean) : [],
+    direction: readPart("direction"),
+    horizon: readPart("horizon"),
+    created_at: "",
+    url: "",
+  };
+}
+
+function renderDetailNewsSignals(signals, notes) {
+  const rows = Array.isArray(signals) && signals.length
+    ? signals.slice(0, 8)
+    : (Array.isArray(notes) ? notes.slice(0, 6).map(parseLegacyNewsNote) : []);
+  if (!rows.length) return detailText("无");
+
+  return `
+    <div class="detail-news-grid">
+      ${rows
+        .map((signal, index) => {
+          const tickers = (signal.matched_codes || signal.normalized_tickers || signal.tickers || []).slice(0, 4).join(", ") || "无明确标的";
+          const assets = (signal.asset_classes || []).slice(0, 3).join(", ") || signal.topic_name || "未分类";
+          const markets = (signal.affected_markets || []).slice(0, 3).join(", ");
+          const url = safeUrl(signal.url);
+          const match = signal.matched_codes?.length ? `${signal.match_type}: ${signal.matched_codes.join(", ")}` : signal.match_type;
+          return `
+            <details class="detail-news-card" ${index === 0 ? "open" : ""}>
+              <summary>
+                <span class="detail-news-main">
+                  <span class="detail-news-title">${html(signal.title || "无标题")}</span>
+                  <span class="detail-news-meta">${html(fmtTime(signal.created_at))} · ${html(tickers)} · ${html(assets)}</span>
+                </span>
+                <span class="detail-news-badges">
+                  <span class="signal-match">${html(match || "note")}</span>
+                  ${signal.impact_score !== "" && signal.impact_score !== undefined ? `<span class="signal-score">${html(signal.impact_score)}</span>` : ""}
+                </span>
+              </summary>
+              <div class="detail-news-body">
+                ${signal.summary ? `<p>${html(signal.summary)}</p>` : ""}
+                ${signal.so_what ? `<p><strong>影响：</strong>${html(signal.so_what)}</p>` : ""}
+                <div class="detail-news-facts">
+                  ${signal.direction ? `<span>方向 ${html(signal.direction)}</span>` : ""}
+                  ${signal.horizon ? `<span>周期 ${html(signal.horizon)}</span>` : ""}
+                  ${markets ? `<span>市场 ${html(markets)}</span>` : ""}
+                  ${signal.confidence !== "" && signal.confidence !== undefined ? `<span>置信 ${html(signal.confidence)}</span>` : ""}
+                </div>
+                ${url ? `<a class="detail-news-link" href="${html(url)}" target="_blank" rel="noopener noreferrer">打开来源</a>` : ""}
+              </div>
+            </details>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
 function renderDetailCandidates(candidates) {
   const rows = Array.isArray(candidates) ? candidates.slice(0, 8) : [];
   if (!rows.length) return detailText("无");
@@ -708,6 +788,7 @@ function renderDecisionDetail(row) {
   const execution = row.execution || null;
   const usage = row.gemini_usage || {};
   const newsNotes = Array.isArray(row.news_notes) ? row.news_notes : [];
+  const newsSignals = Array.isArray(row.news_signals) ? row.news_signals : [];
   const outputTokens = (Number(usage.candidates_token_count) || 0) + (Number(usage.thoughts_token_count) || 0);
 
   status.className = `detail-status ${html(action)}`;
@@ -761,7 +842,7 @@ function renderDecisionDetail(row) {
         : detailText("未执行")
     )}
     ${detailSection("候选标的", renderDetailCandidates(row.candidates || []))}
-    ${detailSection("新闻摘要", detailList(newsNotes.slice(0, 6).map((item) => compactText(item))))}
+    ${detailSection("新闻摘要", renderDetailNewsSignals(newsSignals, newsNotes))}
     ${detailSection(
       "Gemini 用量",
       detailKvGrid([
