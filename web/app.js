@@ -17,7 +17,11 @@ const state = {
 const el = (id) => document.getElementById(id);
 
 function setActiveTab(tab) {
-  const nextPanel = document.querySelector(`[data-tab-panel="${tab}"]`);
+  let nextPanel = document.querySelector(`[data-tab-panel="${tab}"]`);
+  if (!nextPanel) {
+    tab = "overview";
+    nextPanel = document.querySelector(`[data-tab-panel="${tab}"]`);
+  }
   if (!nextPanel) return;
   state.activeTab = tab;
 
@@ -118,6 +122,7 @@ async function refreshStatus() {
     dot.className = `status-dot ${payload.ok ? "ok" : "bad"}`;
     el("statusText").textContent = payload.ok ? "OpenD connected" : "Check OpenD";
     renderRisk(payload.config);
+    renderRiskEditor(payload.config);
     showOutput(payload);
   } catch (err) {
     document.querySelector(".status-dot").className = "status-dot bad";
@@ -376,6 +381,55 @@ function renderRisk(config) {
       `
     )
     .join("");
+}
+
+function renderRiskEditor(config) {
+  if (!config?.risk) return;
+  const risk = config.risk;
+  el("riskRequireWhitelist").checked = Boolean(risk.require_whitelist);
+  el("riskAllowSell").checked = Boolean(risk.allow_sell);
+  el("riskAllowMarketOrders").checked = Boolean(risk.allow_market_orders);
+  el("riskAllowedCodes").value = (risk.allowed_codes || []).join(", ");
+  el("riskMaxOrderUS").value = risk.max_order_value?.US ?? "";
+  el("riskMaxOrderHK").value = risk.max_order_value?.HK ?? "";
+  el("riskMaxQtyUS").value = risk.max_qty?.US ?? "";
+  el("riskMaxQtyHK").value = risk.max_qty?.HK ?? "";
+}
+
+function riskPayloadFromForm() {
+  return {
+    allowed_markets: ["US", "HK"],
+    allowed_codes: el("riskAllowedCodes").value
+      .split(/[,\n]/)
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean),
+    require_whitelist: el("riskRequireWhitelist").checked,
+    allow_sell: el("riskAllowSell").checked,
+    allow_market_orders: el("riskAllowMarketOrders").checked,
+    max_order_value: {
+      US: Number(el("riskMaxOrderUS").value || 0),
+      HK: Number(el("riskMaxOrderHK").value || 0),
+    },
+    max_qty: {
+      US: Number(el("riskMaxQtyUS").value || 0),
+      HK: Number(el("riskMaxQtyHK").value || 0),
+    },
+  };
+}
+
+async function saveRiskConfig() {
+  try {
+    const payload = await api("/api/risk-config", {
+      method: "POST",
+      body: JSON.stringify({ risk: riskPayloadFromForm() }),
+    });
+    state.config = payload.config;
+    renderRisk(payload.config);
+    renderRiskEditor(payload.config);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
 }
 
 function renderGeminiUsage(payload) {
@@ -904,6 +958,7 @@ function bindButtons() {
     renderFilteredNewsSignals();
   });
   el("refreshConfig").addEventListener("click", refreshStatus);
+  el("saveRiskConfig").addEventListener("click", saveRiskConfig);
   el("validateOrder").addEventListener("click", validateOrder);
   el("executeOrder").addEventListener("click", executeOrder);
   el("runGemini").addEventListener("click", runGemini);

@@ -21,7 +21,6 @@
     <nav class="tabbar" aria-label="工作区">
       <button type="button" class="tab-button active" data-tab="overview" aria-selected="true">总览</button>
       <button type="button" class="tab-button" data-tab="market" aria-selected="false">行情</button>
-      <button type="button" class="tab-button" data-tab="trade" aria-selected="false">交易</button>
       <button type="button" class="tab-button" data-tab="decisions" aria-selected="false">AI 决策</button>
       <button type="button" class="tab-button" data-tab="news" aria-selected="false">新闻</button>
       <button type="button" class="tab-button" data-tab="debug" aria-selected="false">调试</button>
@@ -30,7 +29,18 @@
     <main class="workspace">
       <section class="tab-panel active" data-tab-panel="overview">
         <div class="tab-grid">
-          <div class="panel span-7">
+          <div class="panel span-4">
+            <div class="panel-head">
+              <h2>账户</h2>
+              <div class="segmented" role="group" aria-label="账户市场">
+                <button class="segment active" data-account-market="US">US</button>
+                <button class="segment" data-account-market="HK">HK</button>
+              </div>
+            </div>
+            <div class="metric-grid" id="accountGrid"></div>
+          </div>
+
+          <div class="panel span-8">
             <div class="panel-head">
               <h2>Gemini</h2>
               <span class="pill">AUTO · PAPER</span>
@@ -46,66 +56,7 @@
             <button type="button" class="primary-wide" id="runGemini">Gemini 扫描一次</button>
           </div>
 
-          <div class="panel span-5">
-            <div class="panel-head">
-              <h2>Gemini 用量</h2>
-              <button class="icon-button" id="refreshGeminiUsage" title="刷新用量" aria-label="刷新用量">↻</button>
-            </div>
-            <div class="usage-grid" id="geminiUsageGrid"></div>
-          </div>
-
-          <div class="panel span-12">
-            <div class="panel-head">
-              <h2>风控</h2>
-              <button class="icon-button" id="refreshConfig" title="刷新配置" aria-label="刷新配置">↻</button>
-            </div>
-            <div class="risk-list" id="riskList"></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="tab-panel" data-tab-panel="market">
-        <div class="tab-grid">
-          <div class="panel span-5">
-            <div class="panel-head">
-              <h2>临时行情</h2>
-              <button class="icon-button" id="refreshSnapshot" title="刷新行情" aria-label="刷新行情">↻</button>
-            </div>
-            <div class="input-row">
-              <label for="codesInput">代码</label>
-              <input id="codesInput" value="US.AAPL,HK.00700" autocomplete="off">
-            </div>
-            <div class="quote-grid" id="quoteGrid"></div>
-          </div>
-
           <div class="panel span-7">
-            <div class="panel-head">
-              <h2>自选行情</h2>
-              <button class="icon-button" id="refreshMyWatchlist" title="刷新自选" aria-label="刷新自选">↻</button>
-            </div>
-            <div class="watch-add-row">
-              <input id="myWatchCode" placeholder="US.NVDA 或 HK.00700" autocomplete="off">
-              <button type="button" class="secondary compact" id="addMyWatch">添加</button>
-            </div>
-            <div class="watch-grid" id="myWatchGrid"></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="tab-panel" data-tab-panel="trade">
-        <div class="tab-grid">
-          <div class="panel span-4">
-            <div class="panel-head">
-              <h2>账户</h2>
-              <div class="segmented" role="group" aria-label="账户市场">
-                <button class="segment active" data-account-market="US">US</button>
-                <button class="segment" data-account-market="HK">HK</button>
-              </div>
-            </div>
-            <div class="metric-grid" id="accountGrid"></div>
-          </div>
-
-          <div class="panel span-8">
             <div class="panel-head">
               <h2>订单</h2>
               <div class="segmented" role="group" aria-label="订单方向">
@@ -148,7 +99,7 @@
             </form>
           </div>
 
-          <div class="panel span-12">
+          <div class="panel span-5">
             <div class="panel-head">
               <h2>持仓</h2>
               <button class="icon-button" id="refreshPositions" title="刷新持仓" aria-label="刷新持仓">↻</button>
@@ -166,6 +117,81 @@
                 <tbody id="positionsBody"></tbody>
               </table>
             </div>
+          </div>
+
+          <div class="panel span-12">
+            <div class="panel-head">
+              <h2>风控</h2>
+              <button class="icon-button" id="refreshConfig" title="刷新配置" aria-label="刷新配置">↻</button>
+            </div>
+            <div class="risk-list" id="riskList"></div>
+            <form class="risk-editor" id="riskForm">
+              <div class="risk-toggle-grid">
+                <label class="check-row">
+                  <input id="riskRequireWhitelist" type="checkbox">
+                  <span>启用白名单</span>
+                </label>
+                <label class="check-row">
+                  <input id="riskAllowSell" type="checkbox">
+                  <span>允许卖出</span>
+                </label>
+                <label class="check-row">
+                  <input id="riskAllowMarketOrders" type="checkbox">
+                  <span>允许市价单</span>
+                </label>
+              </div>
+              <label class="wide-field">
+                白名单代码
+                <textarea id="riskAllowedCodes" rows="3" placeholder="US.AAPL, HK.00700"></textarea>
+              </label>
+              <div class="field-grid">
+                <label>
+                  US 单笔金额
+                  <input id="riskMaxOrderUS" type="number" min="0" step="1">
+                </label>
+                <label>
+                  HK 单笔金额
+                  <input id="riskMaxOrderHK" type="number" min="0" step="1">
+                </label>
+                <label>
+                  US 最大数量
+                  <input id="riskMaxQtyUS" type="number" min="0" step="1">
+                </label>
+                <label>
+                  HK 最大数量
+                  <input id="riskMaxQtyHK" type="number" min="0" step="1">
+                </label>
+              </div>
+              <button type="button" class="primary-wide" id="saveRiskConfig">保存风控</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="market">
+        <div class="tab-grid">
+          <div class="panel span-5">
+            <div class="panel-head">
+              <h2>临时行情</h2>
+              <button class="icon-button" id="refreshSnapshot" title="刷新行情" aria-label="刷新行情">↻</button>
+            </div>
+            <div class="input-row">
+              <label for="codesInput">代码</label>
+              <input id="codesInput" value="US.AAPL,HK.00700" autocomplete="off">
+            </div>
+            <div class="quote-grid" id="quoteGrid"></div>
+          </div>
+
+          <div class="panel span-7">
+            <div class="panel-head">
+              <h2>自选行情</h2>
+              <button class="icon-button" id="refreshMyWatchlist" title="刷新自选" aria-label="刷新自选">↻</button>
+            </div>
+            <div class="watch-add-row">
+              <input id="myWatchCode" placeholder="US.NVDA 或 HK.00700" autocomplete="off">
+              <button type="button" class="secondary compact" id="addMyWatch">添加</button>
+            </div>
+            <div class="watch-grid" id="myWatchGrid"></div>
           </div>
         </div>
       </section>
@@ -245,12 +271,22 @@
       </section>
 
       <section class="tab-panel" data-tab-panel="debug">
-        <div class="panel">
-          <div class="panel-head">
-            <h2>调试输出</h2>
-            <button class="icon-button" id="clearOutput" title="清空输出" aria-label="清空输出">×</button>
+        <div class="tab-grid">
+          <div class="panel span-5">
+            <div class="panel-head">
+              <h2>Gemini 用量</h2>
+              <button class="icon-button" id="refreshGeminiUsage" title="刷新用量" aria-label="刷新用量">↻</button>
+            </div>
+            <div class="usage-grid" id="geminiUsageGrid"></div>
           </div>
-          <pre id="outputBox">{}</pre>
+
+          <div class="panel span-7">
+            <div class="panel-head">
+              <h2>调试输出</h2>
+              <button class="icon-button" id="clearOutput" title="清空输出" aria-label="清空输出">×</button>
+            </div>
+            <pre id="outputBox">{}</pre>
+          </div>
         </div>
       </section>
     </main>

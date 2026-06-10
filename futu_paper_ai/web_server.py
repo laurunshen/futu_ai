@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .auto_trader import AutoTrader
-from .config import AppConfig, PROJECT_ROOT, public_config
+from .config import AppConfig, PROJECT_ROOT, public_config, save_runtime_risk_config
 from .futu_client import FutuPaperClient, _load_futu
 from .models import OrderIntent
 from .news_signals import load_news_signals
@@ -347,6 +347,10 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 execute = bool(payload.get("execute", False))
                 intent = OrderIntent.from_dict(intent_payload)
                 self._send_json(self.client.place_order(intent, execute=execute))
+            elif path == "/api/risk-config":
+                save_runtime_risk_config(payload.get("risk", payload))
+                config = self.config
+                self._send_json({"ok": True, "risk": public_config(config)["risk"], "config": public_config(config)})
             elif path == "/api/ai/once":
                 execute = bool(payload.get("execute", False))
                 notes = payload.get("notes") or []

@@ -113,6 +113,10 @@ class AutoTrader:
         print(f"Gemini auto loop started. interval={interval}s execute={execute}")
         while True:
             try:
+                self.config = AppConfig.from_env()
+                self.client = FutuPaperClient(self.config)
+                self.engine = GeminiDecisionEngine(self.config.gemini)
+                interval = max(30, self.config.gemini.loop_interval_seconds)
                 result = self.run_once(execute=execute)
                 print(json.dumps(_clean(asdict(result)), ensure_ascii=False, default=str))
             except Exception as exc:

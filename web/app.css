@@ -942,6 +942,29 @@ pre {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.risk-editor {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.risk-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.risk-toggle-grid .check-row {
+  margin-top: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
 .risk-item {
   display: flex;
   justify-content: space-between;
@@ -1016,7 +1039,8 @@ pre {
   .metric-grid,
   .usage-grid,
   .field-grid,
-  .risk-list {
+  .risk-list,
+  .risk-toggle-grid {
     grid-template-columns: 1fr;
   }
 
