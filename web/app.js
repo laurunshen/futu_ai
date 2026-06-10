@@ -1,4 +1,5 @@
 const state = {
+  activeTab: "overview",
   accountMarket: "US",
   side: "BUY",
   config: null,
@@ -9,6 +10,28 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+
+function setActiveTab(tab) {
+  const nextPanel = document.querySelector(`[data-tab-panel="${tab}"]`);
+  if (!nextPanel) return;
+  state.activeTab = tab;
+
+  document.querySelectorAll("[data-tab]").forEach((button) => {
+    const active = button.dataset.tab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.tabPanel === tab);
+  });
+
+  try {
+    window.localStorage.setItem("futu-paper-ai-tab", tab);
+  } catch {
+    // Local storage can be blocked by browser privacy settings.
+  }
+}
 
 function showOutput(payload) {
   el("outputBox").textContent = JSON.stringify(payload, null, 2);
@@ -610,7 +633,20 @@ function bindButtons() {
   el("clearOutput").addEventListener("click", () => showOutput({}));
 }
 
+function bindTabs() {
+  document.querySelectorAll("[data-tab]").forEach((button) => {
+    button.addEventListener("click", () => setActiveTab(button.dataset.tab));
+  });
+
+  try {
+    setActiveTab(window.localStorage.getItem("futu-paper-ai-tab") || state.activeTab);
+  } catch {
+    setActiveTab(state.activeTab);
+  }
+}
+
 async function init() {
+  bindTabs();
   bindSegments();
   bindButtons();
   await refreshStatus();
