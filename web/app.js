@@ -3,6 +3,7 @@ const state = {
   side: "BUY",
   config: null,
   decisionEntries: [],
+  myWatchlistTimer: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -38,6 +39,24 @@ function html(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function rowChangePct(row) {
+  const direct = Number(row.change_rate ?? row.change_pct);
+  if (Number.isFinite(direct)) return direct;
+  const last = Number(row.last_price);
+  const prev = Number(row.prev_close_price);
+  if (Number.isFinite(last) && Number.isFinite(prev) && prev > 0) {
+    return ((last - prev) / prev) * 100;
+  }
+  return null;
+}
+
+function changeClass(value) {
+  if (!Number.isFinite(value)) return "flat";
+  if (value > 0) return "up";
+  if (value < 0) return "down";
+  return "flat";
 }
 
 async function api(path, options = {}) {
@@ -107,6 +126,17 @@ async function refreshPositions() {
   }
 }
 
+async function refreshMyWatchlist({ silent = false } = {}) {
+  try {
+    const payload = await api("/api/my-watchlist");
+    renderMyWatchlist(payload);
+    if (!silent) showOutput(payload);
+  } catch (err) {
+    el("myWatchGrid").innerHTML = `<div class="empty">Watchlist unavailable</div>`;
+    if (!silent) showOutput(err);
+  }
+}
+
 async function refreshDecisions() {
   try {
     const payload = await api("/api/decisions?limit=20");
@@ -114,6 +144,36 @@ async function refreshDecisions() {
     renderDecisions(state.decisionEntries);
   } catch (err) {
     el("decisionList").innerHTML = `<div class="empty">Decision history unavailable</div>`;
+    showOutput(err);
+  }
+}
+
+async function addMyWatch() {
+  const codeInput = el("myWatchCode");
+  const code = codeInput.value.trim().toUpperCase();
+  if (!code) return;
+  try {
+    const payload = await api("/api/my-watchlist/add", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    codeInput.value = "";
+    renderMyWatchlist(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function removeMyWatch(code) {
+  try {
+    const payload = await api("/api/my-watchlist/remove", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    renderMyWatchlist(payload);
+    showOutput(payload);
+  } catch (err) {
     showOutput(err);
   }
 }
@@ -140,6 +200,49 @@ function renderQuotes(rows) {
       `
     )
     .join("");
+}
+
+function renderMyWatchlist(payload) {
+  const grid = el("myWatchGrid");
+  const quotes = payload.quotes || [];
+  const items = payload.items || [];
+  const quoteByCode = new Map(quotes.map((row) => [String(row.code || "").toUpperCase(), row]));
+  const rows = items.map((item) => ({ ...item, ...(quoteByCode.get(String(item.code).toUpperCase()) || {}) }));
+
+  if (!rows.length) {
+    grid.innerHTML = `<div class="empty">No watchlist symbols</div>`;
+    return;
+  }
+
+  const warning = payload.quote_error ? `<div class="empty">${html(payload.quote_error)}</div>` : "";
+  grid.innerHTML = warning + rows
+    .map((row) => {
+      const change = rowChangePct(row);
+      const cls = changeClass(change);
+      const displayName = row.name || row.watch_name || row.code;
+      const sector = row.sector || row.watch_sector || row.market;
+      return `
+        <article class="watch-item">
+          <button type="button" class="watch-remove" data-watch-remove="${html(row.code)}" title="删除" aria-label="删除 ${html(row.code)}">×</button>
+          <div class="watch-code">${html(row.code)}</div>
+          <div class="watch-name">${html(displayName)}</div>
+          <div class="watch-price-row">
+            <span class="watch-price">${html(row.last_price)}</span>
+            <span class="watch-change ${cls}">${Number.isFinite(change) ? `${change.toFixed(2)}%` : "-"}</span>
+          </div>
+          <div class="watch-meta">
+            <span>${html(sector)}</span>
+            <span>Bid ${html(row.bid_price)}</span>
+            <span>Ask ${html(row.ask_price)}</span>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  grid.querySelectorAll("[data-watch-remove]").forEach((button) => {
+    button.addEventListener("click", () => removeMyWatch(button.dataset.watchRemove));
+  });
 }
 
 function renderAccount(row) {
@@ -347,6 +450,14 @@ function bindSegments() {
 
 function bindButtons() {
   el("refreshSnapshot").addEventListener("click", refreshSnapshot);
+  el("refreshMyWatchlist").addEventListener("click", () => refreshMyWatchlist());
+  el("addMyWatch").addEventListener("click", addMyWatch);
+  el("myWatchCode").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addMyWatch();
+    }
+  });
   el("refreshPositions").addEventListener("click", refreshPositions);
   el("refreshDecisions").addEventListener("click", refreshDecisions);
   el("refreshConfig").addEventListener("click", refreshStatus);
@@ -361,9 +472,11 @@ async function init() {
   bindButtons();
   await refreshStatus();
   await refreshSnapshot();
+  await refreshMyWatchlist({ silent: true });
   await refreshAccount();
   await refreshPositions();
   await refreshDecisions();
+  state.myWatchlistTimer = window.setInterval(() => refreshMyWatchlist({ silent: true }), 20000);
 }
 
 init();

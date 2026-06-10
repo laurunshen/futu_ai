@@ -15,7 +15,7 @@ from .auto_trader import AutoTrader
 from .config import AppConfig, PROJECT_ROOT, public_config
 from .futu_client import FutuPaperClient, _load_futu
 from .models import OrderIntent
-from .watchlist import load_watchlist
+from .watchlist import add_user_watch, load_user_watchlist, load_watchlist, remove_user_watch
 
 
 STATIC_ROOT = PROJECT_ROOT / "web"
@@ -142,6 +142,8 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 markets = set(self._query_list(query, "markets")) if query.get("markets") else None
                 items = load_watchlist(markets=markets)
                 self._send_json({"ok": True, "count": len(items), "items": [item.__dict__ for item in items]})
+            elif path == "/api/my-watchlist":
+                self._send_json(self._my_watchlist_payload())
             elif path == "/api/decisions":
                 limit = self._query_int(query, "limit", 20)
                 entries = _read_decisions(limit)
@@ -170,10 +172,51 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     raise ValueError("notes must be a list")
                 result = AutoTrader(self.config).run_once(execute=execute, notes=[str(note) for note in notes])
                 self._send_json(result.__dict__)
+            elif path == "/api/my-watchlist/add":
+                code = str(payload.get("code", "")).strip().upper()
+                if not code:
+                    raise ValueError("code is required")
+                name = str(payload.get("name", "")).strip()
+                sector = str(payload.get("sector", "Other")).strip() or "Other"
+                add_user_watch(code, name=name, sector=sector)
+                self._send_json(self._my_watchlist_payload())
+            elif path == "/api/my-watchlist/remove":
+                code = str(payload.get("code", "")).strip().upper()
+                if not code:
+                    raise ValueError("code is required")
+                remove_user_watch(code)
+                self._send_json(self._my_watchlist_payload())
             else:
                 self._send_json({"ok": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def _my_watchlist_payload(self) -> dict[str, Any]:
+        items = load_user_watchlist()
+        codes = [item.code for item in items]
+        quote_rows: list[dict[str, Any]] = []
+        quote_error = ""
+        if codes:
+            quote_payload = self.client.snapshot(codes)
+            if quote_payload.get("ok"):
+                quote_by_code = {str(row.get("code", "")).upper(): row for row in quote_payload.get("data") or []}
+                for item in items:
+                    row = dict(quote_by_code.get(item.code, {}))
+                    row.setdefault("code", item.code)
+                    row["watch_name"] = item.name
+                    row["watch_sector"] = item.sector
+                    row["market"] = item.market
+                    quote_rows.append(row)
+            else:
+                quote_error = str(quote_payload.get("data") or quote_payload.get("error") or "quote request failed")
+
+        return {
+            "ok": not quote_error,
+            "count": len(items),
+            "items": [item.__dict__ for item in items],
+            "quotes": quote_rows,
+            "quote_error": quote_error,
+        }
 
     def _serve_static(self, path: str, head_only: bool = False) -> None:
         target = "index.html" if path in {"", "/"} else path.lstrip("/")

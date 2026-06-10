@@ -34,6 +34,18 @@
 
         <div class="panel">
           <div class="panel-head">
+            <h2>自选</h2>
+            <button class="icon-button" id="refreshMyWatchlist" title="刷新自选" aria-label="刷新自选">↻</button>
+          </div>
+          <div class="watch-add-row">
+            <input id="myWatchCode" placeholder="US.NVDA 或 HK.00700" autocomplete="off">
+            <button type="button" class="secondary compact" id="addMyWatch">添加</button>
+          </div>
+          <div class="watch-grid" id="myWatchGrid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
             <h2>账户</h2>
             <div class="segmented" role="group" aria-label="账户市场">
               <button class="segment active" data-account-market="US">US</button>
