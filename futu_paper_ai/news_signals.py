@@ -273,6 +273,8 @@ def load_news_signals(
         "db_path": str(db_path),
         "lookback_hours": config.lookback_hours,
         "min_impact": config.min_impact,
+        "max_signals": config.max_signals,
+        "available_count": len(ranked_signals),
         "candidate_codes": sorted(candidate_code_set),
         "focus_codes": sorted(focus_code_set),
         "count": len(signals),

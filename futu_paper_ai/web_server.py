@@ -5,6 +5,7 @@ import math
 import mimetypes
 import socket
 from collections import deque
+from dataclasses import replace
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -319,7 +320,16 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 date_text = self._query_one(query, "date", datetime.now().date().isoformat())
                 self._send_json(_gemini_usage_payload(self.config, date_text))
             elif path == "/api/news-signals":
-                self._send_json(load_news_signals(self.config.news))
+                display_limit = self._query_int(query, "limit", 50)
+                min_impact = self._query_int(query, "min_impact", self.config.news.min_impact)
+                lookback_hours = self._query_int(query, "lookback_hours", self.config.news.lookback_hours)
+                news_config = replace(
+                    self.config.news,
+                    max_signals=max(1, min(display_limit, 200)),
+                    min_impact=max(0, min(min_impact, 100)),
+                    lookback_hours=max(1, min(lookback_hours, 168)),
+                )
+                self._send_json(load_news_signals(news_config))
             else:
                 self._send_json({"ok": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:

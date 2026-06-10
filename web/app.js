@@ -7,6 +7,10 @@ const state = {
   selectedDecisionIndex: null,
   decisionPage: 1,
   decisionTotalPages: 1,
+  newsSignals: [],
+  newsPayload: null,
+  newsPage: 1,
+  newsTotalPages: 1,
   myWatchlistTimer: null,
 };
 
@@ -204,7 +208,7 @@ async function refreshGeminiUsage() {
 
 async function refreshNewsSignals({ silent = false } = {}) {
   try {
-    const payload = await api("/api/news-signals");
+    const payload = await api("/api/news-signals?limit=50");
     renderNewsSignals(payload);
     if (!silent) showOutput(payload);
   } catch (err) {
@@ -401,17 +405,77 @@ function renderGeminiUsage(payload) {
 }
 
 function renderNewsSignals(payload) {
-  const list = el("newsSignalList");
   const signals = payload.signals || [];
+  state.newsPayload = payload;
+  state.newsSignals = signals;
+  state.newsPage = 1;
   if (!payload.enabled) {
-    list.innerHTML = `<div class="empty">AUTONEWS_DB_PATH is not set</div>`;
+    el("newsSignalList").innerHTML = `<div class="empty">AUTONEWS_DB_PATH is not set</div>`;
+    renderNewsPager(0, 0);
     return;
   }
   if (!signals.length) {
-    list.innerHTML = `<div class="empty">${html(payload.message || "No recent high-impact signals")}</div>`;
+    el("newsSignalList").innerHTML = `<div class="empty">${html(payload.message || "No recent high-impact signals")}</div>`;
+    renderNewsPager(0, Number(payload.available_count || 0));
+    return;
+  }
+  renderFilteredNewsSignals();
+}
+
+function newsSearchText(signal) {
+  return [
+    signal.title,
+    signal.summary,
+    signal.so_what,
+    signal.topic_name,
+    signal.direction,
+    ...(signal.tickers || []),
+    ...(signal.normalized_tickers || []),
+    ...(signal.matched_codes || []),
+    ...(signal.asset_classes || []),
+    ...(signal.affected_markets || []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function filteredNewsSignals() {
+  const query = (el("newsSearch")?.value || "").trim().toLowerCase();
+  const match = el("newsMatch")?.value || "ALL";
+  const minImpact = Number(el("newsMinImpact")?.value || 0);
+  return state.newsSignals.filter((signal) => {
+    if (match !== "ALL" && signal.match_type !== match) return false;
+    if (Number(signal.impact_score || 0) < minImpact) return false;
+    if (query && !newsSearchText(signal).includes(query)) return false;
+    return true;
+  });
+}
+
+function renderNewsPager(filteredCount, availableCount) {
+  const page = state.newsPage || 1;
+  const totalPages = state.newsTotalPages || 1;
+  el("newsSignalSummary").textContent = `${filteredCount} / ${availableCount || state.newsSignals.length}`;
+  el("newsPageInfo").textContent = `${page} / ${totalPages}`;
+  el("prevNewsPage").disabled = page <= 1;
+  el("nextNewsPage").disabled = page >= totalPages;
+}
+
+function renderFilteredNewsSignals() {
+  const list = el("newsSignalList");
+  const payload = state.newsPayload || {};
+  const signals = filteredNewsSignals();
+  const pageSize = Number(el("newsPageSize")?.value || 20);
+  state.newsTotalPages = Math.max(1, Math.ceil(signals.length / pageSize));
+  state.newsPage = Math.min(Math.max(state.newsPage || 1, 1), state.newsTotalPages);
+  const start = (state.newsPage - 1) * pageSize;
+  const pageRows = signals.slice(start, start + pageSize);
+  renderNewsPager(signals.length, Number(payload.available_count || state.newsSignals.length));
+  if (!pageRows.length) {
+    list.innerHTML = `<div class="empty">没有匹配的新闻信号</div>`;
     return;
   }
   list.innerHTML = signals
+    .slice(start, start + pageSize)
     .map((signal) => {
       const tickers = (signal.tickers || []).slice(0, 5).join(", ") || "无明确标的";
       const assets = (signal.asset_classes || []).slice(0, 4).join(", ") || signal.topic_name;
@@ -815,6 +879,30 @@ function bindButtons() {
   });
   el("refreshGeminiUsage").addEventListener("click", refreshGeminiUsage);
   el("refreshNewsSignals").addEventListener("click", () => refreshNewsSignals());
+  el("newsSearch").addEventListener("input", () => {
+    state.newsPage = 1;
+    renderFilteredNewsSignals();
+  });
+  el("newsMatch").addEventListener("change", () => {
+    state.newsPage = 1;
+    renderFilteredNewsSignals();
+  });
+  el("newsMinImpact").addEventListener("change", () => {
+    state.newsPage = 1;
+    renderFilteredNewsSignals();
+  });
+  el("newsPageSize").addEventListener("change", () => {
+    state.newsPage = 1;
+    renderFilteredNewsSignals();
+  });
+  el("prevNewsPage").addEventListener("click", () => {
+    state.newsPage = Math.max(1, state.newsPage - 1);
+    renderFilteredNewsSignals();
+  });
+  el("nextNewsPage").addEventListener("click", () => {
+    state.newsPage = Math.min(state.newsTotalPages, state.newsPage + 1);
+    renderFilteredNewsSignals();
+  });
   el("refreshConfig").addEventListener("click", refreshStatus);
   el("validateOrder").addEventListener("click", validateOrder);
   el("executeOrder").addEventListener("click", executeOrder);

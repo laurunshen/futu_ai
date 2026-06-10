@@ -617,7 +617,15 @@ tr:last-child td {
   margin-bottom: 10px;
 }
 
-.decision-pager {
+.signal-tools {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 150px 130px 110px;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.decision-pager,
+.signal-pager {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -625,6 +633,10 @@ tr:last-child td {
   margin-bottom: 10px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.signal-pager {
+  justify-content: space-between;
 }
 
 .pager-button {
@@ -1020,6 +1032,10 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .signal-tools {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .detail-kv-grid,
   .detail-candidate-grid {
     grid-template-columns: 1fr;
@@ -1027,7 +1043,8 @@ pre {
 }
 
 @media (max-width: 420px) {
-  .decision-tools {
+  .decision-tools,
+  .signal-tools {
     grid-template-columns: 1fr;
   }
 }

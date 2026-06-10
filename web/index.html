@@ -218,6 +218,28 @@
             <h2>新闻信号</h2>
             <button class="icon-button" id="refreshNewsSignals" title="刷新新闻信号" aria-label="刷新新闻信号">↻</button>
           </div>
+          <div class="signal-tools">
+            <input id="newsSearch" placeholder="搜索标题、代码、主题" autocomplete="off">
+            <select id="newsMatch" aria-label="匹配类型">
+              <option value="ALL">ALL</option>
+              <option value="candidate">候选相关</option>
+              <option value="watchlist">自选相关</option>
+              <option value="macro">宏观</option>
+              <option value="general">普通</option>
+            </select>
+            <input id="newsMinImpact" type="number" min="0" max="100" step="1" value="0" aria-label="最低影响分">
+            <select id="newsPageSize" aria-label="每页新闻数量">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+            </select>
+          </div>
+          <div class="signal-pager">
+            <span id="newsSignalSummary">0 / 0</span>
+            <button type="button" class="pager-button" id="prevNewsPage" aria-label="上一页">‹</button>
+            <span id="newsPageInfo">1 / 1</span>
+            <button type="button" class="pager-button" id="nextNewsPage" aria-label="下一页">›</button>
+          </div>
           <div class="signal-list" id="newsSignalList"></div>
         </div>
       </section>
