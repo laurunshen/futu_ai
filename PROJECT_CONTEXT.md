@@ -107,6 +107,7 @@ data/state/portfolios.json
 - 新增模拟盘。
 - 删除模拟盘。
 - 设置当前模拟盘。
+- 修改当前模拟盘现金。
 - 添加/编辑/删除持仓。
 - 持仓字段：代码、名称、数量、成本价、币种、备注。
 - 前端会显示 OpenD 快照价、成本、市值、浮盈浮亏。
@@ -168,6 +169,52 @@ futu_paper_ai/auto_trader.py
 - 当前模式是 `portfolio_decision` / `portfolio_suggestion`。
 - 不会自动改本地模拟盘持仓。
 - 不会向富途提交订单。
+
+### TradingAgents-lite 决策增强
+
+2026-06-11 已在现有 Gemini 决策引擎里加入第一版 TradingAgents-lite。
+
+设计原则：
+
+- 不把 `tauricresearch/tradingagents` 整体作为项目底座。
+- 不引入 LangGraph / LangChain 作为主流程依赖。
+- 保留当前 Futu OpenD、autoNews、本地模拟盘、风控和 Web 工作区作为主系统。
+- 借鉴 TradingAgents 的多角色研究结构，让单次 Gemini 决策输出更像“研究小组审议”。
+
+配置：
+
+```bash
+GEMINI_AGENT_MODE=multi_lite
+```
+
+当前实现仍是单次 Gemini structured output 调用，但 schema 增加：
+
+- `rating`：`BUY` / `OVERWEIGHT` / `HOLD` / `UNDERWEIGHT` / `SELL`
+- `position_action`：`ENTER` / `ADD` / `HOLD` / `TRIM` / `EXIT` / `WATCH`
+- `research.market_analyst`
+- `research.news_analyst`
+- `research.portfolio_analyst`
+- `research.bull_case`
+- `research.bear_case`
+- `research.risk_review`
+- `research.manager_summary`
+- `research.missing_data`
+
+旧字段仍保持兼容：
+
+- `action`
+- `code`
+- `confidence`
+- `reason`
+- `evidence`
+- `risk`
+- `invalidation`
+- `max_notional`
+- `time_horizon`
+- `learning_note`
+
+执行层仍只读取 `BUY` / `SELL` / `HOLD` 等旧字段，并继续通过现有风控和模拟盘安全边界。
+前端 AI 决策详情页会显示“研究小组”、五档评级和组合动作。
 
 手动扫描按钮现在也调用多模拟盘版本：
 

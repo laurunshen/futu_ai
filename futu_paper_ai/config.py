@@ -84,6 +84,7 @@ class RiskConfig:
 class GeminiConfig:
     api_key: str
     model: str
+    agent_mode: str
     auto_enabled: bool
     auto_execute: bool
     observe_markets: set[str]
@@ -148,6 +149,7 @@ class AppConfig:
             gemini=GeminiConfig(
                 api_key=os.environ.get("GEMINI_API_KEY", "").strip(),
                 model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash").strip(),
+                agent_mode=os.environ.get("GEMINI_AGENT_MODE", "multi_lite").strip().lower() or "multi_lite",
                 auto_enabled=_bool_env("GEMINI_AUTO_ENABLED", False),
                 auto_execute=_bool_env("GEMINI_AUTO_EXECUTE", False),
                 observe_markets=_split_csv(os.environ.get("GEMINI_OBSERVE_MARKETS", "US,HK")),

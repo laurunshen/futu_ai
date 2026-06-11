@@ -192,6 +192,19 @@ def set_active_portfolio(portfolio_id: str) -> dict[str, Any]:
     return save_portfolios(store)
 
 
+def update_portfolio_cash(portfolio_id: str | None, cash: Any) -> dict[str, Any]:
+    store = load_portfolios()
+    target_id = str(portfolio_id or store["active_id"])
+    for portfolio in store["portfolios"]:
+        if portfolio["id"] != target_id:
+            continue
+        portfolio["cash"] = max(0.0, _num(cash, 0))
+        portfolio["updated_at"] = _now()
+        store["active_id"] = target_id
+        return save_portfolios(store)
+    raise ValueError("portfolio not found")
+
+
 def upsert_position(portfolio_id: str | None, payload: dict[str, Any]) -> dict[str, Any]:
     store = load_portfolios()
     target_id = str(portfolio_id or store["active_id"])

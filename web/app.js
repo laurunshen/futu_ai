@@ -429,8 +429,22 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
       </div>
       ${totalCards}
     </div>
+    <div class="portfolio-cash-editor">
+      <label>
+        模拟现金 ${html(portfolio.base_currency)}
+        <input id="activePortfolioCash" type="number" min="0" step="1" value="${html(portfolio.cash || 0)}">
+      </label>
+      <button type="button" class="secondary compact" id="savePortfolioCash">保存现金</button>
+    </div>
     ${quoteError ? `<div class="chat-warning">${html(quoteError)}</div>` : ""}
   `;
+  el("savePortfolioCash")?.addEventListener("click", savePortfolioCash);
+  el("activePortfolioCash")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      savePortfolioCash();
+    }
+  });
 }
 
 function renderPortfolioPositions(portfolio) {
@@ -1000,6 +1014,43 @@ function renderDetailCandidates(candidates) {
   `;
 }
 
+function renderResearchBrief(research) {
+  if (!research || typeof research !== "object") return detailText("无");
+  const sections = [
+    ["行情分析师", research.market_analyst],
+    ["新闻分析师", research.news_analyst],
+    ["持仓分析师", research.portfolio_analyst],
+    ["看多观点", research.bull_case],
+    ["看空观点", research.bear_case],
+    ["风控复核", research.risk_review],
+    ["组合经理", research.manager_summary],
+  ].filter(([, value]) => value !== null && value !== undefined && String(value).trim());
+  const missing = Array.isArray(research.missing_data)
+    ? research.missing_data.filter((item) => item !== null && item !== undefined && String(item).trim())
+    : [];
+  if (!sections.length && !missing.length) return detailText("无");
+  return `
+    <div class="research-brief">
+      ${sections
+        .map(
+          ([label, value]) => `
+            <div class="research-row">
+              <div class="research-label">${html(label)}</div>
+              <p>${html(value)}</p>
+            </div>
+          `
+        )
+        .join("")}
+      ${missing.length ? `
+        <div class="research-row">
+          <div class="research-label">缺失信息</div>
+          ${detailList(missing)}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function renderDecisionDetail(row) {
   const card = el("decisionDetailCard");
   const status = el("decisionDetailStatus");
@@ -1038,10 +1089,13 @@ function renderDecisionDetail(row) {
     </article>
 
     ${detailSection("决策理由", detailText(decision.reason))}
+    ${detailSection("研究小组", renderResearchBrief(decision.research))}
     ${detailSection("证据", detailList(decision.evidence))}
     ${detailSection(
       "风险与失效条件",
       detailKvGrid([
+        ["评级", decision.rating],
+        ["组合动作", decision.position_action],
         ["风险", decision.risk],
         ["失效条件", decision.invalidation],
         ["时间周期", decision.time_horizon],
@@ -1345,6 +1399,26 @@ async function deletePortfolio(portfolioId) {
     const payload = await api("/api/portfolios/delete", {
       method: "POST",
       body: JSON.stringify({ portfolio_id: portfolioId }),
+    });
+    renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function savePortfolioCash() {
+  if (!state.activePortfolioId) return;
+  const input = el("activePortfolioCash");
+  const cash = Number(input?.value || 0);
+  if (!Number.isFinite(cash) || cash < 0) {
+    input?.focus();
+    return;
+  }
+  try {
+    const payload = await api("/api/portfolios/cash", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_id: state.activePortfolioId, cash }),
     });
     renderPortfolios(payload);
     showOutput(payload);

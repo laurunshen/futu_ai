@@ -71,6 +71,14 @@ The auto loop observes the 100-code watchlist, selects a small candidate set
 from quote snapshots, asks Gemini for BUY / SELL / HOLD with reasons, and only
 submits paper orders after risk checks pass.
 
+Gemini decisions default to `GEMINI_AGENT_MODE=multi_lite`. This keeps the
+existing single-call Gemini workflow, but asks the model to fill a
+TradingAgents-style research brief before the final action: market analyst,
+news analyst, portfolio analyst, bull case, bear case, conservative risk
+review, portfolio-manager summary, and missing data. The executor still reads
+only the strict BUY / SELL / HOLD fields and applies the same paper-only risk
+checks.
+
 Candidate selection is two-stage:
 
 1. Rank the 100-code watchlist by market activity:

@@ -417,6 +417,22 @@ textarea {
   color: var(--red);
 }
 
+.portfolio-cash-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.portfolio-cash-editor label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.portfolio-cash-editor input {
+  margin-top: 5px;
+}
+
 .position-form {
   display: grid;
   gap: 12px;
@@ -1165,6 +1181,35 @@ tr:last-child td {
 .detail-list li {
   margin: 6px 0;
   font-size: 13px;
+}
+
+.research-brief {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.research-row {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.research-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.research-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.research-row p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .detail-kv-grid,

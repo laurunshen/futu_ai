@@ -25,6 +25,7 @@ from .portfolios import (
     delete_position,
     load_portfolios,
     set_active_portfolio,
+    update_portfolio_cash,
     upsert_position,
 )
 from .watchlist import add_user_watch, load_user_watchlist, load_watchlist, remove_user_watch
@@ -401,6 +402,12 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/active":
                 store = set_active_portfolio(str(payload.get("portfolio_id", "")).strip())
+                self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/cash":
+                store = update_portfolio_cash(
+                    str(payload.get("portfolio_id", "")).strip() or None,
+                    payload.get("cash", 0),
+                )
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/position":
                 store = upsert_position(str(payload.get("portfolio_id", "")).strip() or None, payload.get("position", payload))
