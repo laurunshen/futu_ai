@@ -522,7 +522,8 @@ textarea {
 }
 
 .portfolio-cash-editor input,
-.portfolio-settings select {
+.portfolio-settings select,
+.portfolio-settings input {
   margin-top: 5px;
 }
 
@@ -1174,6 +1175,12 @@ tr:last-child td {
   gap: 10px;
 }
 
+.evaluation-insights {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .evaluation-metrics {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1224,6 +1231,75 @@ tr:last-child td {
 .attribution-row strong {
   color: var(--text);
   min-width: 0;
+}
+
+.insight-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+  min-width: 0;
+}
+
+.insight-head,
+.insight-row {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+}
+
+.insight-head {
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.insight-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.insight-table {
+  display: grid;
+  gap: 7px;
+}
+
+.insight-row {
+  grid-template-columns: minmax(120px, 1.3fr) repeat(4, minmax(72px, 1fr));
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ab-table .insight-row,
+.strategy-table .insight-row {
+  grid-template-columns: minmax(120px, 1.3fr) repeat(5, minmax(72px, 1fr));
+}
+
+.insight-row strong {
+  color: var(--text);
+  min-width: 0;
+}
+
+.insight-foot {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.review-chip-row span {
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #e7eef6;
+  color: #113a63;
+  font-size: 12px;
+  font-weight: 740;
 }
 
 .evaluation-portfolio,
@@ -1788,6 +1864,29 @@ tr:last-child td {
   text-decoration: none;
 }
 
+.human-review-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.human-review-form select,
+.human-review-form textarea {
+  width: 100%;
+}
+
+.human-review-form textarea {
+  resize: vertical;
+  min-height: 42px;
+}
+
+.human-review-form span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 pre {
   min-height: 220px;
   max-height: 420px;
@@ -2028,12 +2127,30 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .evaluation-insights {
+    grid-template-columns: 1fr;
+  }
+
   .attribution-head {
     grid-template-columns: 1fr;
   }
 
   .attribution-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .insight-head {
+    grid-template-columns: 1fr;
+  }
+
+  .insight-row,
+  .ab-table .insight-row,
+  .strategy-table .insight-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .human-review-form {
+    grid-template-columns: 1fr;
   }
 
   .signal-tools {

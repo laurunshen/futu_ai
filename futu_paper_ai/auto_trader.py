@@ -172,6 +172,8 @@ class AutoTrader:
             "fx_error": fx_payload.get("error"),
             "buying_power_rule": "本地账本买入跨币种资产时，可按汇率从基础币种现金自动换汇扣款；优先使用富途 OpenD FX，失败时明确记录本地默认汇率来源。",
             "apply_mode": portfolio.get("apply_mode", "manual"),
+            "strategy_profile": portfolio.get("strategy_profile", "general"),
+            "strategy_tags": list(portfolio.get("strategy_tags", [])),
             "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
             "position_count": len(positions),
             "recent_operations": list(portfolio.get("operations", []))[-20:],
@@ -211,6 +213,10 @@ class AutoTrader:
         news_notes.append(
             f"{portfolio_note}当前应用模式={apply_mode}；富途模拟盘同步={futu_sync_text}。"
             "manual 需要用户确认，auto 会按设置应用；若同步开启，应用时先提交富途模拟单，再按实际成交反写本地。"
+        )
+        news_notes.append(
+            f"策略档案={portfolio.get('strategy_profile', 'general')}；"
+            f"策略标签={', '.join(portfolio.get('strategy_tags') or []) or '未设置'}。"
         )
         news_notes.append(language_note)
         news_notes.append(
@@ -266,6 +272,8 @@ class AutoTrader:
                 "fx_ok": bool(fx_payload.get("ok")),
                 "fx_error": fx_payload.get("error"),
                 "apply_mode": apply_mode,
+                "strategy_profile": portfolio.get("strategy_profile", "general"),
+                "strategy_tags": list(portfolio.get("strategy_tags", [])),
                 "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
                 "position_count": len(positions),
             },

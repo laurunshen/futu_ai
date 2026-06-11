@@ -273,6 +273,45 @@ def _mark_decision_application(decision_id: str, application: dict[str, Any]) ->
     return False
 
 
+def _mark_decision_human_review(decision_ref: str, review: dict[str, Any]) -> dict[str, Any]:
+    decision_ref = str(decision_ref or "").strip()
+    if not decision_ref or not DECISION_LOG_ROOT.exists():
+        raise ValueError("decision_id is required")
+    label = str(review.get("label") or "").strip()
+    allowed_labels = {"", "correct", "too_early", "too_late", "wrong", "risk_saved_loss"}
+    if label not in allowed_labels:
+        raise ValueError("invalid review label")
+    human_review = {
+        "label": label,
+        "note": str(review.get("note") or "").strip()[:1000],
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl"), reverse=True):
+        changed = False
+        next_lines: list[str] = []
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                next_lines.append(line)
+                continue
+            if not isinstance(entry, dict):
+                next_lines.append(line)
+                continue
+            entry.setdefault("log_date", log_path.stem)
+            evaluation_id = decision_evaluation_id(entry)
+            if str(entry.get("decision_id") or "") == decision_ref or evaluation_id == decision_ref:
+                entry["human_review"] = human_review
+                changed = True
+            next_lines.append(json.dumps(entry, ensure_ascii=False))
+        if changed:
+            log_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+            return human_review
+    raise ValueError("decision not found")
+
+
 def _num(value: Any) -> int:
     try:
         return int(value or 0)
@@ -546,6 +585,8 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     apply_mode=str(payload.get("apply_mode", "")).strip() or None,
                     portfolio_kind=str(payload.get("portfolio_kind", "")).strip() or None,
                     futu_sync_enabled=bool(payload["futu_sync_enabled"]) if "futu_sync_enabled" in payload else None,
+                    strategy_profile=str(payload.get("strategy_profile", "")).strip() or None,
+                    strategy_tags=payload.get("strategy_tags") if "strategy_tags" in payload else None,
                 )
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/cash":
@@ -621,6 +662,10 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 )
                 _mark_decision_application(decision_id, application)
                 self._send_json({"ok": bool(application.get("ok", True)), "application": application, "portfolio_payload": self._portfolio_payload()})
+            elif path == "/api/decisions/review":
+                decision_ref = str(payload.get("decision_id") or payload.get("evaluation_id") or "").strip()
+                human_review = _mark_decision_human_review(decision_ref, payload.get("review", payload))
+                self._send_json({"ok": True, "decision_id": decision_ref, "human_review": human_review})
             elif path == "/api/my-watchlist/add":
                 code = str(payload.get("code", "")).strip().upper()
                 if not code:

@@ -15,6 +15,7 @@ DEFAULT_PORTFOLIO_ID = "default"
 APPLY_MODES = {"observe", "manual", "auto"}
 PORTFOLIO_KINDS = {"paper", "actual"}
 DEFAULT_FX_TO_HKD = {"HKD": 1.0, "USD": 7.8, "CNY": 1.08, "CNH": 1.08}
+STRATEGY_PROFILES = {"general", "short_swing", "long_hold", "growth_aggressive", "defensive_cashflow", "news_driven"}
 
 
 def _now() -> str:
@@ -82,6 +83,35 @@ def _normalize_portfolio_kind(value: Any) -> str:
     if kind in {"actual", "real", "live", "mirror"}:
         return "actual"
     return kind if kind in PORTFOLIO_KINDS else "paper"
+
+
+def _normalize_strategy_profile(value: Any) -> str:
+    profile = str(value or "general").strip().lower()
+    return profile if profile in STRATEGY_PROFILES else "general"
+
+
+def _normalize_strategy_tags(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_items = value.replace("，", ",").split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = []
+    tags: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        tag = str(item or "").strip()
+        if not tag:
+            continue
+        tag = tag[:24]
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+        if len(tags) >= 8:
+            break
+    return tags
 
 
 def _portfolio_kind_label(kind: Any) -> str:
@@ -226,6 +256,8 @@ def _default_store() -> dict[str, Any]:
                 "fx_to_hkd": dict(DEFAULT_FX_TO_HKD),
                 "apply_mode": "manual",
                 "portfolio_kind": "paper",
+                "strategy_profile": "general",
+                "strategy_tags": [],
                 "futu_sync_enabled": False,
                 "positions": [],
                 "trades": [],
@@ -310,6 +342,8 @@ def _normalize_portfolio(payload: dict[str, Any]) -> dict[str, Any]:
         "fx_source": str(payload.get("fx_source") or "local_default_fx_to_hkd"),
         "fx_status": dict(payload.get("fx_status") or {}),
         "apply_mode": _normalize_apply_mode(payload.get("apply_mode")),
+        "strategy_profile": _normalize_strategy_profile(payload.get("strategy_profile")),
+        "strategy_tags": _normalize_strategy_tags(payload.get("strategy_tags")),
         "futu_sync_enabled": bool(payload.get("futu_sync_enabled", False)),
         "parent_id": str(payload.get("parent_id") or ""),
         "positions": positions,
@@ -381,6 +415,8 @@ def create_portfolio(name: str, *, base_currency: str = "HKD", cash: float = 0.0
         "fx_to_hkd": dict(DEFAULT_FX_TO_HKD),
         "apply_mode": "manual",
         "portfolio_kind": "paper",
+        "strategy_profile": "general",
+        "strategy_tags": [],
         "futu_sync_enabled": False,
         "positions": [],
         "trades": [],
@@ -442,6 +478,8 @@ def clone_portfolio(portfolio_id: str | None, *, name: str = "", apply_mode: str
         "fx_to_hkd": dict(source.get("fx_to_hkd") or DEFAULT_FX_TO_HKD),
         "apply_mode": _normalize_apply_mode(apply_mode or source.get("apply_mode")),
         "portfolio_kind": source.get("portfolio_kind", "paper"),
+        "strategy_profile": _normalize_strategy_profile(source.get("strategy_profile")),
+        "strategy_tags": list(source.get("strategy_tags") or []),
         "futu_sync_enabled": False,
         "parent_id": source.get("id", ""),
         "positions": [dict(position) for position in source.get("positions", [])],
@@ -473,6 +511,8 @@ def update_portfolio_settings(
     apply_mode: str | None = None,
     portfolio_kind: str | None = None,
     futu_sync_enabled: bool | None = None,
+    strategy_profile: str | None = None,
+    strategy_tags: list[str] | str | None = None,
 ) -> dict[str, Any]:
     store = load_portfolios()
     target_id = str(portfolio_id or store["active_id"])
@@ -499,6 +539,17 @@ def update_portfolio_settings(
             if bool(portfolio.get("futu_sync_enabled")) != next_sync:
                 changes["futu_sync_enabled"] = {"from": bool(portfolio.get("futu_sync_enabled")), "to": next_sync}
                 portfolio["futu_sync_enabled"] = next_sync
+        if strategy_profile is not None:
+            next_profile = _normalize_strategy_profile(strategy_profile)
+            if _normalize_strategy_profile(portfolio.get("strategy_profile")) != next_profile:
+                changes["strategy_profile"] = {"from": portfolio.get("strategy_profile") or "general", "to": next_profile}
+                portfolio["strategy_profile"] = next_profile
+        if strategy_tags is not None:
+            next_tags = _normalize_strategy_tags(strategy_tags)
+            current_tags = _normalize_strategy_tags(portfolio.get("strategy_tags"))
+            if current_tags != next_tags:
+                changes["strategy_tags"] = {"from": current_tags, "to": next_tags}
+                portfolio["strategy_tags"] = next_tags
         if changes:
             summary_parts = []
             if "portfolio_kind" in changes:
@@ -507,6 +558,10 @@ def update_portfolio_settings(
                 summary_parts.append(f"AI模式 {changes['apply_mode']['from']} -> {changes['apply_mode']['to']}")
             if "futu_sync_enabled" in changes:
                 summary_parts.append(f"富途同步 {'开启' if changes['futu_sync_enabled']['to'] else '关闭'}")
+            if "strategy_profile" in changes:
+                summary_parts.append(f"策略 {changes['strategy_profile']['from']} -> {changes['strategy_profile']['to']}")
+            if "strategy_tags" in changes:
+                summary_parts.append(f"标签 {', '.join(changes['strategy_tags']['to']) or '清空'}")
             _append_operation(
                 portfolio,
                 {
@@ -852,6 +907,8 @@ def portfolio_context(portfolio_id: str | None = None) -> dict[str, Any]:
             "fx_to_hkd": active.get("fx_to_hkd", {}),
             "buying_power_rule": "本地账本买入跨币种资产时，可以按汇率从基础币种现金自动换汇扣款。",
             "apply_mode": active.get("apply_mode", "manual"),
+            "strategy_profile": active.get("strategy_profile", "general"),
+            "strategy_tags": list(active.get("strategy_tags", [])),
             "recent_operations": list(active.get("operations", []))[-20:],
             "updated_at": active["updated_at"],
         },

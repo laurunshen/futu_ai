@@ -287,6 +287,7 @@ async function refreshEvaluation() {
   } catch (err) {
     state.evaluation = null;
     el("evaluationSummary").innerHTML = `<div class="empty">Evaluation unavailable</div>`;
+    el("evaluationInsights").innerHTML = `<div class="empty">Evaluation unavailable</div>`;
     el("decisionTrackingList").innerHTML = `<div class="empty">Decision tracking unavailable</div>`;
     drawEquityChart([]);
     showOutput(err);
@@ -425,6 +426,27 @@ function applyModeLabel(mode) {
   }[String(mode || "manual").toLowerCase()] || "手动应用";
 }
 
+function strategyProfileLabel(profile) {
+  return {
+    general: "通用策略",
+    short_swing: "短线波段",
+    long_hold: "长期持有",
+    growth_aggressive: "激进成长",
+    defensive_cashflow: "防守现金流",
+    news_driven: "新闻驱动",
+  }[String(profile || "general").toLowerCase()] || "通用策略";
+}
+
+function humanReviewLabel(label) {
+  return {
+    correct: "正确",
+    too_early: "过早",
+    too_late: "过晚",
+    wrong: "误判",
+    risk_saved_loss: "风控避免损失",
+  }[String(label || "")] || "未复盘";
+}
+
 function portfolioKindLabel(kind) {
   return {
     actual: "实际仓位镜像",
@@ -535,11 +557,12 @@ function renderPortfolios(payload) {
         .join(" · ");
       const syncLabel = futuSyncLabel(portfolio);
       const kindLabel = portfolioKindLabel(portfolio.portfolio_kind);
+      const strategyLabel = strategyProfileLabel(portfolio.strategy_profile);
       return `
         <article class="portfolio-item ${active ? "active" : ""}">
           <button type="button" class="portfolio-main" data-portfolio-active="${html(portfolio.id)}">
             <span class="portfolio-name">${html(portfolio.name)}</span>
-            <span class="portfolio-meta">${html(kindLabel)} · ${html(applyModeLabel(portfolio.apply_mode))}${syncLabel ? ` · ${html(syncLabel)}` : ""} · ${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
+            <span class="portfolio-meta">${html(kindLabel)} · ${html(applyModeLabel(portfolio.apply_mode))} · ${html(strategyLabel)}${syncLabel ? ` · ${html(syncLabel)}` : ""} · ${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
           </button>
           <button type="button" class="portfolio-delete" data-portfolio-delete="${html(portfolio.id)}" title="删除模拟盘" aria-label="删除 ${html(portfolio.name)}">×</button>
         </article>
@@ -657,6 +680,21 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
           <option value="auto" ${portfolio.apply_mode === "auto" ? "selected" : ""}>自动应用</option>
         </select>
       </label>
+      <label>
+        策略档案
+        <select id="activePortfolioStrategyProfile">
+          <option value="general" ${!portfolio.strategy_profile || portfolio.strategy_profile === "general" ? "selected" : ""}>通用策略</option>
+          <option value="short_swing" ${portfolio.strategy_profile === "short_swing" ? "selected" : ""}>短线波段</option>
+          <option value="long_hold" ${portfolio.strategy_profile === "long_hold" ? "selected" : ""}>长期持有</option>
+          <option value="growth_aggressive" ${portfolio.strategy_profile === "growth_aggressive" ? "selected" : ""}>激进成长</option>
+          <option value="defensive_cashflow" ${portfolio.strategy_profile === "defensive_cashflow" ? "selected" : ""}>防守现金流</option>
+          <option value="news_driven" ${portfolio.strategy_profile === "news_driven" ? "selected" : ""}>新闻驱动</option>
+        </select>
+      </label>
+      <label>
+        策略标签
+        <input id="activePortfolioStrategyTags" value="${html((portfolio.strategy_tags || []).join(", "))}" placeholder="例如：AI算力, 港股核心仓" autocomplete="off">
+      </label>
       <label class="portfolio-sync-toggle" title="应用模拟盘订单时先提交富途模拟单，并用实际成交反写本地">
         <input id="activePortfolioFutuSync" type="checkbox" ${portfolio.futu_sync_enabled ? "checked" : ""}>
         <span>同步富途模拟盘</span>
@@ -676,6 +714,8 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
   });
   el("activePortfolioKind")?.addEventListener("change", updateActivePortfolioMode);
   el("activePortfolioMode")?.addEventListener("change", updateActivePortfolioMode);
+  el("activePortfolioStrategyProfile")?.addEventListener("change", updateActivePortfolioMode);
+  el("activePortfolioStrategyTags")?.addEventListener("change", updateActivePortfolioMode);
   el("activePortfolioFutuSync")?.addEventListener("change", updateActivePortfolioMode);
   target.querySelectorAll("[data-clone-mode]").forEach((button) => {
     button.addEventListener("click", () => cloneActivePortfolio(button.dataset.cloneMode));
@@ -906,6 +946,7 @@ function renderEvaluation(payload) {
     status.textContent = payload.ok ? "OpenD 估值" : "行情异常";
   }
   renderEvaluationSummary(payload);
+  renderEvaluationInsights(payload);
   renderEquity(payload.equity_curves || []);
   renderDecisionTracking(payload.decision_tracking || []);
   showOutput(payload);
@@ -1002,6 +1043,147 @@ function renderAttributionSummary(attribution) {
       </div>
     </section>
   `;
+}
+
+function compactMetric(value, formatter = fmt) {
+  return value === null || value === undefined || value === "" ? "-" : formatter(value);
+}
+
+function renderEvaluationInsights(payload) {
+  const target = el("evaluationInsights");
+  if (!target) return;
+  target.innerHTML = `
+    ${renderExecutionQuality(payload.execution_quality || {})}
+    ${renderAbTestSummary(payload.ab_tests || {})}
+    ${renderStrategyBreakdown(payload.strategy_breakdown || {})}
+    ${renderNewsEffect(payload.news_effect || {})}
+    ${renderReviewSummary(payload.review_summary || {})}
+  `;
+}
+
+function renderInsightPanel(title, body, meta = "") {
+  return `
+    <section class="insight-panel">
+      <div class="insight-head">
+        <strong>${html(title)}</strong>
+        ${meta ? `<span>${html(meta)}</span>` : ""}
+      </div>
+      ${body}
+    </section>
+  `;
+}
+
+function renderExecutionQuality(executionQuality) {
+  const summary = executionQuality.summary || {};
+  const rows = Array.isArray(executionQuality.portfolios) ? executionQuality.portfolios : [];
+  const orderCount = Number(summary.order_count || 0);
+  const meta = orderCount
+    ? `${orderCount} 单 · 填充 ${compactMetric(summary.fill_rate_pct, fmtPct)} · 失败 ${compactMetric(summary.failure_rate_pct, fmtPct)}`
+    : "暂无富途同步订单";
+  const body = rows.length
+    ? `
+      <div class="insight-table execution-table">
+        ${rows
+          .map((row) => `
+            <div class="insight-row">
+              <strong>${html(row.portfolio_name || row.portfolio_id)}</strong>
+              <span>${html(row.order_count || 0)} 单</span>
+              <span>填充 ${html(compactMetric(row.fill_rate_pct, fmtPct))}</span>
+              <span>失败 ${html(compactMetric(row.failure_rate_pct, fmtPct))}</span>
+              <span class="${html(changeClass(-Number(row.adverse_slippage_hkd || 0)))}">${html(fmtHkd(row.adverse_slippage_hkd || 0))}</span>
+            </div>
+          `)
+          .join("")}
+      </div>
+      <div class="insight-foot">平均滑点 ${html(compactMetric(summary.avg_adverse_slippage_pct, fmtPct))} · 滑点金额 ${html(fmtHkd(summary.adverse_slippage_hkd || 0))}</div>
+    `
+    : `<div class="empty compact-empty">暂无富途同步订单</div>`;
+  return renderInsightPanel("富途执行质量", body, meta);
+}
+
+function renderAbTestSummary(abTests) {
+  const rows = Array.isArray(abTests.rows) ? abTests.rows : [];
+  if (!rows.length) {
+    return renderInsightPanel("AB Test 对比", `<div class="empty compact-empty">暂无模拟盘对比数据</div>`);
+  }
+  const body = `
+    <div class="insight-table ab-table">
+      ${rows
+        .map((row) => `
+          <div class="insight-row">
+            <strong>${html(row.portfolio_name || row.portfolio_id)}</strong>
+            <span>${html(applyModeLabel(row.apply_mode))}</span>
+            <span>${html(strategyProfileLabel(row.strategy_profile))}</span>
+            <span class="${html(changeClass(Number(row.return_pct)))}">收益 ${html(compactMetric(row.return_pct, fmtPct))}</span>
+            <span>回撤 ${html(compactMetric(row.max_drawdown_pct, fmtPct))}</span>
+            <span>交易 ${html(row.trade_count || 0)}</span>
+          </div>
+        `)
+        .join("")}
+    </div>
+  `;
+  const groupCount = Array.isArray(abTests.groups) ? abTests.groups.length : 0;
+  return renderInsightPanel("AB Test 对比", body, `${rows.length} 个组合 · ${groupCount} 组克隆对照`);
+}
+
+function renderStrategyBreakdown(strategyBreakdown) {
+  const rows = Array.isArray(strategyBreakdown.rows) ? strategyBreakdown.rows : [];
+  if (!rows.length) {
+    return renderInsightPanel("策略标签表现", `<div class="empty compact-empty">暂无策略标签数据</div>`);
+  }
+  const body = `
+    <div class="insight-table strategy-table">
+      ${rows
+        .map((row) => `
+          <div class="insight-row">
+            <strong>${html(strategyProfileLabel(row.key))}</strong>
+            <span>${html(row.portfolio_count || 0)} 盘</span>
+            <span>${html(row.decision_count || 0)} 决策</span>
+            <span>${html(row.trade_count || 0)} 交易</span>
+            <span class="${html(changeClass(Number(row.avg_current_decision_return_pct)))}">当前 ${html(compactMetric(row.avg_current_decision_return_pct, fmtPct))}</span>
+            <span>${html((row.tags || []).join(", ") || "-")}</span>
+          </div>
+        `)
+        .join("")}
+    </div>
+  `;
+  return renderInsightPanel("策略标签表现", body);
+}
+
+function renderNewsEffect(newsEffect) {
+  const rows = Array.isArray(newsEffect.buckets) ? newsEffect.buckets : [];
+  if (!rows.length) {
+    return renderInsightPanel("新闻因子效果", `<div class="empty compact-empty">暂无新闻效果数据</div>`);
+  }
+  const body = `
+    <div class="insight-table news-effect-table">
+      ${rows
+        .map((row) => `
+          <div class="insight-row">
+            <strong>${html(row.label)}</strong>
+            <span>${html(row.decision_count || 0)} 决策</span>
+            <span>${html(row.measured_directional_count || 0)} 已测</span>
+            <span>胜率 ${html(compactMetric(row.win_rate, fmtPct))}</span>
+            <span class="${html(changeClass(Number(row.avg_current_decision_return_pct)))}">当前 ${html(compactMetric(row.avg_current_decision_return_pct, fmtPct))}</span>
+          </div>
+        `)
+        .join("")}
+    </div>
+  `;
+  return renderInsightPanel("新闻因子效果", body);
+}
+
+function renderReviewSummary(reviewSummary) {
+  const rows = Array.isArray(reviewSummary.label_counts) ? reviewSummary.label_counts : [];
+  const meta = `${html(reviewSummary.reviewed_count || 0)} 已复盘 · ${html(reviewSummary.unreviewed_count || 0)} 待复盘`;
+  const body = rows.length
+    ? `
+      <div class="review-chip-row">
+        ${rows.map((row) => `<span>${html(row.label_text)} ${html(row.count)}</span>`).join("")}
+      </div>
+    `
+    : `<div class="empty compact-empty">暂无人工复盘标签</div>`;
+  return renderInsightPanel("人工复盘汇总", body, meta);
 }
 
 function renderEquity(curves) {
@@ -1175,6 +1357,8 @@ function renderDecisionTracking(rows) {
             <span>当前 ${html(row.current_price || "-")}</span>
             <span class="${cls}">当前 ${html(fmtPct(directionValue))}</span>
             <span>${html(applicationLabel({ status: row.application_status }))}</span>
+            <span>新闻 ${html(row.news_signal_count || 0)}</span>
+            <span>${html(humanReviewLabel(row.human_review?.label))}</span>
           </div>
           ${renderHorizonPills(row.horizons)}
         </article>
@@ -1527,6 +1711,26 @@ function renderFutuSyncDetail(application) {
   ]);
 }
 
+function renderHumanReview(row) {
+  const review = row?.human_review || {};
+  const label = String(review.label || "");
+  return `
+    <div class="human-review-form">
+      <select id="humanReviewLabel" aria-label="人工复盘标签">
+        <option value="" ${!label ? "selected" : ""}>未复盘</option>
+        <option value="correct" ${label === "correct" ? "selected" : ""}>正确</option>
+        <option value="too_early" ${label === "too_early" ? "selected" : ""}>过早</option>
+        <option value="too_late" ${label === "too_late" ? "selected" : ""}>过晚</option>
+        <option value="wrong" ${label === "wrong" ? "selected" : ""}>误判</option>
+        <option value="risk_saved_loss" ${label === "risk_saved_loss" ? "selected" : ""}>风控避免损失</option>
+      </select>
+      <textarea id="humanReviewNote" rows="3" placeholder="复盘备注">${html(review.note || "")}</textarea>
+      <button type="button" class="secondary compact" id="saveHumanReview">保存复盘</button>
+      ${review.updated_at ? `<span>${html(fmtTime(review.updated_at))}</span>` : ""}
+    </div>
+  `;
+}
+
 function detailSection(title, body) {
   return `
     <section class="detail-section">
@@ -1858,6 +2062,7 @@ function renderDecisionDetail(row) {
       ])
     )}
     ${detailSection("复盘追踪", renderDecisionFollowups(followup))}
+    ${detailSection("人工复盘", renderHumanReview(row))}
     ${application?.futu_sync ? detailSection("富途同步", renderFutuSyncDetail(application)) : ""}
     ${canApplyDecision ? `<button type="button" class="primary-wide decision-apply-button" id="applyDecisionToPortfolio">应用到模拟盘</button>` : ""}
     ${portfolio ? detailSection(
@@ -1884,6 +2089,7 @@ function renderDecisionDetail(row) {
     ${decision.learning_note ? `<div class="detail-note">${html(decision.learning_note)}</div>` : ""}
   `;
   el("applyDecisionToPortfolio")?.addEventListener("click", applySelectedDecision);
+  el("saveHumanReview")?.addEventListener("click", saveSelectedDecisionReview);
 }
 
 function selectDecision(index, { scroll = false } = {}) {
@@ -1991,6 +2197,32 @@ async function applySelectedDecision() {
       message: err?.error || err?.message || "应用失败",
     };
     renderDecisionDetail(row);
+  }
+}
+
+async function saveSelectedDecisionReview() {
+  const row = state.decisionEntries[state.selectedDecisionIndex];
+  const decisionRef = row?.decision_id || row?.evaluation_id;
+  if (!decisionRef) return;
+  const review = {
+    label: el("humanReviewLabel")?.value || "",
+    note: el("humanReviewNote")?.value || "",
+  };
+  try {
+    const payload = await api("/api/decisions/review", {
+      method: "POST",
+      body: JSON.stringify({
+        decision_id: decisionRef,
+        review,
+      }),
+    });
+    row.human_review = payload.human_review || review;
+    renderDecisionDetail(row);
+    await refreshEvaluation();
+    await refreshDecisions();
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
   }
 }
 
@@ -2229,6 +2461,11 @@ async function updateActivePortfolioMode() {
         portfolio_id: state.activePortfolioId,
         portfolio_kind: el("activePortfolioKind")?.value || "paper",
         apply_mode: el("activePortfolioMode").value,
+        strategy_profile: el("activePortfolioStrategyProfile")?.value || "general",
+        strategy_tags: (el("activePortfolioStrategyTags")?.value || "")
+          .split(/[，,]/)
+          .map((item) => item.trim())
+          .filter(Boolean),
         futu_sync_enabled: Boolean(el("activePortfolioFutuSync")?.checked),
       }),
     });
