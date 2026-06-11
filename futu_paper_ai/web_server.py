@@ -109,11 +109,18 @@ def _read_decisions(limit: int) -> list[dict[str, Any]]:
 
 
 def _read_decisions_page(
-    *, page: int, page_size: int, action: str = "ALL", date_start: str = "", date_end: str = ""
+    *,
+    page: int,
+    page_size: int,
+    action: str = "ALL",
+    date_start: str = "",
+    date_end: str = "",
+    portfolio_id: str = "",
 ) -> dict[str, Any]:
     page = max(1, page)
     page_size = max(1, min(page_size, 100))
     action = action.upper()
+    portfolio_id = str(portfolio_id or "").strip()
     entries: list[dict[str, Any]] = []
 
     if DECISION_LOG_ROOT.exists():
@@ -135,6 +142,10 @@ def _read_decisions_page(
                 decision_action = str(entry.get("decision", {}).get("action", "")).upper()
                 if action != "ALL" and decision_action != action:
                     continue
+                if portfolio_id and portfolio_id != "ALL":
+                    entry_portfolio = entry.get("portfolio") or {}
+                    if str(entry_portfolio.get("id") or "") != portfolio_id:
+                        continue
                 entry.setdefault("log_date", log_date)
                 entries.append(entry)
 
@@ -326,6 +337,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 action = self._query_one(query, "action", "ALL")
                 date_start = self._query_one(query, "date_start", "")
                 date_end = self._query_one(query, "date_end", "")
+                portfolio_id = self._query_one(query, "portfolio_id", "")
                 self._send_json(
                     _read_decisions_page(
                         page=page,
@@ -333,6 +345,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                         action=action,
                         date_start=date_start,
                         date_end=date_end,
+                        portfolio_id=portfolio_id,
                     )
                 )
             elif path == "/api/gemini-usage":

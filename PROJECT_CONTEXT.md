@@ -165,7 +165,7 @@ futu_paper_ai/auto_trader.py
 - 会遍历所有本地模拟盘。
 - 每个模拟盘分别调用 Gemini 决策。
 - 决策写入 `data/decisions/YYYY-MM-DD.jsonl`。
-- 决策记录里包含 `portfolio` 字段，前端决策页会显示属于哪个模拟盘。
+- 决策记录里包含 `portfolio` 字段，前端 AI 决策页会显示属于哪个模拟盘，并支持按模拟盘筛选历史记录。
 - 当前模式是 `portfolio_decision` / `portfolio_suggestion`。
 - 不会自动改本地模拟盘持仓。
 - 不会向富途提交订单。

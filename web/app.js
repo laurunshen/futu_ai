@@ -7,6 +7,7 @@ const state = {
   selectedDecisionIndex: null,
   decisionPage: 1,
   decisionTotalPages: 1,
+  decisionPortfolioId: "",
   newsSignals: [],
   newsPayload: null,
   newsPage: 1,
@@ -202,8 +203,10 @@ async function refreshDecisions() {
     page_size: el("decisionPageSize").value,
     action: el("decisionAction").value,
   });
+  const portfolioId = el("decisionPortfolio")?.value || state.decisionPortfolioId || "";
   const start = el("decisionStart").value;
   const end = el("decisionEnd").value;
+  if (portfolioId && portfolioId !== "ALL") params.set("portfolio_id", portfolioId);
   if (start) params.set("date_start", start);
   if (end) params.set("date_end", end);
   try {
@@ -351,6 +354,23 @@ function renderChatPortfolioOptions() {
   select.value = state.portfolios.some((portfolio) => portfolio.id === current) ? current : state.activePortfolioId;
 }
 
+function renderDecisionPortfolioOptions({ followActive = false } = {}) {
+  const select = el("decisionPortfolio");
+  if (!select) return;
+  const portfolioIds = new Set(state.portfolios.map((portfolio) => portfolio.id));
+  const hasLoadedOptions = select.dataset.loaded === "true";
+  const current = followActive
+    ? state.activePortfolioId
+    : state.decisionPortfolioId || (hasLoadedOptions ? select.value : state.activePortfolioId) || "ALL";
+  select.innerHTML = [
+    `<option value="ALL">全部模拟盘</option>`,
+    ...state.portfolios.map((portfolio) => `<option value="${html(portfolio.id)}">${html(portfolio.name)}</option>`),
+  ].join("");
+  select.value = portfolioIds.has(current) || current === "ALL" ? current : state.activePortfolioId || "ALL";
+  select.dataset.loaded = "true";
+  state.decisionPortfolioId = select.value;
+}
+
 function renderPortfolios(payload) {
   state.portfolios = payload.portfolios || [];
   state.activePortfolioId = payload.active_id || state.portfolios[0]?.id || "";
@@ -359,6 +379,7 @@ function renderPortfolios(payload) {
     list.innerHTML = `<div class="empty">No portfolios</div>`;
     renderPortfolioDetails(null, payload.quote_error);
     renderChatPortfolioOptions();
+    renderDecisionPortfolioOptions();
     return;
   }
 
@@ -389,6 +410,7 @@ function renderPortfolios(payload) {
 
   renderPortfolioDetails(activePortfolio(), payload.quote_error);
   renderChatPortfolioOptions();
+  renderDecisionPortfolioOptions();
 }
 
 function renderPortfolioDetails(portfolio, quoteError = "") {
@@ -1371,6 +1393,12 @@ async function createPortfolio() {
     });
     el("portfolioName").value = "";
     renderPortfolios(payload);
+    renderDecisionPortfolioOptions({ followActive: true });
+    if (state.activeTab === "decisions") {
+      state.decisionPage = 1;
+      state.selectedDecisionIndex = null;
+      await refreshDecisions();
+    }
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1385,6 +1413,12 @@ async function setActivePortfolio(portfolioId) {
       body: JSON.stringify({ portfolio_id: portfolioId }),
     });
     renderPortfolios(payload);
+    renderDecisionPortfolioOptions({ followActive: true });
+    if (state.activeTab === "decisions") {
+      state.decisionPage = 1;
+      state.selectedDecisionIndex = null;
+      await refreshDecisions();
+    }
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1401,6 +1435,11 @@ async function deletePortfolio(portfolioId) {
       body: JSON.stringify({ portfolio_id: portfolioId }),
     });
     renderPortfolios(payload);
+    if (state.activeTab === "decisions") {
+      state.decisionPage = 1;
+      state.selectedDecisionIndex = null;
+      await refreshDecisions();
+    }
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1534,6 +1573,12 @@ function bindButtons() {
   });
   el("refreshPositions").addEventListener("click", refreshPositions);
   el("refreshDecisions").addEventListener("click", refreshDecisions);
+  el("decisionPortfolio").addEventListener("change", () => {
+    state.decisionPortfolioId = el("decisionPortfolio").value;
+    state.decisionPage = 1;
+    state.selectedDecisionIndex = null;
+    refreshDecisions();
+  });
   el("decisionStart").addEventListener("change", () => {
     state.decisionPage = 1;
     state.selectedDecisionIndex = null;
