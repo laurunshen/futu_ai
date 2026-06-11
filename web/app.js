@@ -460,6 +460,14 @@ function futuSyncLabel(portfolio) {
   return pending > 0 ? `富途同步 · ${pending} 待回写` : "富途同步";
 }
 
+function fxSourceLabel(portfolio) {
+  const source = String(portfolio?.fx_source || "");
+  if (source === "broker_manual_fx_to_hkd") return "券商校准FX";
+  if (source === "futu_opend_fx_snapshot") return "Futu OpenD FX";
+  if (source === "third_party_fx_to_hkd") return "第三方FX";
+  return "默认FX";
+}
+
 function operationSourceLabel(source) {
   return {
     auto: "AI 自动",
@@ -498,6 +506,17 @@ function renderCashEffects(effects) {
       return `${sign}${effect.amount} ${effect.currency}${target}`;
     })
     .join("；");
+}
+
+function renderTradeFees(trade) {
+  const fee = Number(trade?.fees ?? trade?.payload?.fees);
+  const currency = trade?.fee_currency || trade?.currency || "";
+  if (!Number.isFinite(fee) || fee <= 0) return "";
+  const details = trade?.fee_details || trade?.payload?.fee_details || [];
+  const detailText = Array.isArray(details) && details.length
+    ? details.map((item) => `${item.name || "费用"} ${fmt(item.amount)} ${item.currency || currency}`).join("；")
+    : "";
+  return `${fmt(fee)} ${currency}${detailText ? `（${detailText}）` : ""}`;
 }
 
 function renderChatPortfolioOptions() {
@@ -607,9 +626,13 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     .filter(([currency]) => currency !== "HKD")
     .map(([currency, value]) => `${currency}=${fmt(value)}`)
     .join(" · ");
-  const fxLabel = portfolio.fx_ok ? "Futu OpenD FX" : "默认FX";
+  const fxLabel = fxSourceLabel(portfolio);
+  const fxClass = portfolio.fx_source === "broker_manual_fx_to_hkd" ? "manual" : portfolio.fx_ok ? "live" : "fallback";
   const cashCurrencies = Array.from(new Set([portfolio.base_currency, ...Object.keys(cashByCurrency), "HKD", "USD", "CNY", "CNH"].filter(Boolean)));
   const selectedCashCurrency = portfolio.base_currency || cashCurrencies[0] || "HKD";
+  const hypothesis = portfolio.strategy_hypothesis || {};
+  const riskOverrides = portfolio.risk_overrides || {};
+  const riskMaxOrder = riskOverrides.max_order_value || {};
   const cashCards = cashRows.length
     ? cashRows
         .map(
@@ -647,10 +670,25 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
       ${cashCards}
       ${totalCards}
     </div>
-    <div class="portfolio-fx-strip ${portfolio.fx_ok ? "live" : "fallback"}">
+    <div class="portfolio-fx-strip ${fxClass}">
       <span>${html(fxLabel)}</span>
       <strong>${html(fxRateText || "HKD=1")}</strong>
       ${portfolio.fx_error ? `<small>${html(portfolio.fx_error)}</small>` : ""}
+    </div>
+    <div class="portfolio-fx-editor">
+      <label>
+        USD/HKD
+        <input id="activePortfolioFxUSD" type="number" min="0" step="0.0001" value="${html(fxRates.USD ?? 7.8)}">
+      </label>
+      <label>
+        CNY/HKD
+        <input id="activePortfolioFxCNY" type="number" min="0" step="0.0001" value="${html(fxRates.CNY ?? 1.08)}">
+      </label>
+      <label>
+        CNH/HKD
+        <input id="activePortfolioFxCNH" type="number" min="0" step="0.0001" value="${html(fxRates.CNH ?? fxRates.CNY ?? 1.08)}">
+      </label>
+      <button type="button" class="secondary compact" id="savePortfolioFx">保存券商FX</button>
     </div>
     <div class="portfolio-cash-editor">
       <label>
@@ -695,6 +733,46 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
         策略标签
         <input id="activePortfolioStrategyTags" value="${html((portfolio.strategy_tags || []).join(", "))}" placeholder="例如：AI算力, 港股核心仓" autocomplete="off">
       </label>
+      <label>
+        实验基准
+        <input id="activePortfolioBenchmark" value="${html(hypothesis.benchmark || "")}" placeholder="例如：US.QQQ / HK.03033" autocomplete="off">
+      </label>
+      <label>
+        US 单笔上限
+        <input id="activePortfolioRiskMaxOrderUS" type="number" min="0" step="1" value="${html(riskMaxOrder.US ?? "")}" placeholder="继承全局">
+      </label>
+      <label>
+        HK 单笔上限
+        <input id="activePortfolioRiskMaxOrderHK" type="number" min="0" step="1" value="${html(riskMaxOrder.HK ?? "")}" placeholder="继承全局">
+      </label>
+      <label>
+        单标上限 %
+        <input id="activePortfolioRiskMaxPositionPct" type="number" min="0" step="1" value="${html(riskOverrides.max_position_pct ?? "")}" placeholder="继承全局">
+      </label>
+      <label>
+        总仓位上限 %
+        <input id="activePortfolioRiskMaxEquityPct" type="number" min="0" step="1" value="${html(riskOverrides.max_equity_exposure_pct ?? "")}" placeholder="继承全局">
+      </label>
+      <label>
+        最低现金 %
+        <input id="activePortfolioRiskMinCashPct" type="number" min="0" step="1" value="${html(riskOverrides.min_cash_pct ?? "")}" placeholder="继承全局">
+      </label>
+      <label>
+        日交易上限
+        <input id="activePortfolioMaxTradesPerDay" type="number" min="0" step="1" value="${html(riskOverrides.max_trades_per_day ?? "")}" placeholder="继承全局">
+      </label>
+      <label>
+        冷却分钟
+        <input id="activePortfolioCooldownMinutes" type="number" min="0" step="1" value="${html(riskOverrides.cooldown_minutes ?? "")}" placeholder="继承全局">
+      </label>
+      <label class="wide-field">
+        预注册假设
+        <textarea id="activePortfolioHypothesis" placeholder="这个盘预期在哪类行情下跑赢、为什么">${html(hypothesis.hypothesis || "")}</textarea>
+      </label>
+      <label class="wide-field">
+        策略提示模板
+        <textarea id="activePortfolioPromptTemplate" placeholder="例如：只做新闻催化后的 1-3 周波段；没有明确催化时优先 HOLD">${html(portfolio.prompt_template || "")}</textarea>
+      </label>
       <label class="portfolio-sync-toggle" title="应用模拟盘订单时先提交富途模拟单，并用实际成交反写本地">
         <input id="activePortfolioFutuSync" type="checkbox" ${portfolio.futu_sync_enabled ? "checked" : ""}>
         <span>同步富途模拟盘</span>
@@ -708,6 +786,7 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     ${quoteError ? `<div class="chat-warning">${html(quoteError)}</div>` : ""}
   `;
   el("savePortfolioCash")?.addEventListener("click", savePortfolioCash);
+  el("savePortfolioFx")?.addEventListener("click", savePortfolioFx);
   el("activePortfolioCashCurrency")?.addEventListener("change", () => {
     const currency = el("activePortfolioCashCurrency").value;
     el("activePortfolioCash").value = cashByCurrency[currency] ?? 0;
@@ -716,6 +795,16 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
   el("activePortfolioMode")?.addEventListener("change", updateActivePortfolioMode);
   el("activePortfolioStrategyProfile")?.addEventListener("change", updateActivePortfolioMode);
   el("activePortfolioStrategyTags")?.addEventListener("change", updateActivePortfolioMode);
+  el("activePortfolioBenchmark")?.addEventListener("change", updateActivePortfolioMode);
+  el("activePortfolioHypothesis")?.addEventListener("change", updateActivePortfolioMode);
+  el("activePortfolioPromptTemplate")?.addEventListener("change", updateActivePortfolioMode);
+  [
+    "activePortfolioRiskMaxOrderUS",
+    "activePortfolioRiskMaxOrderHK",
+    "activePortfolioRiskMaxPositionPct",
+    "activePortfolioRiskMaxEquityPct",
+    "activePortfolioRiskMinCashPct",
+  ].forEach((id) => el(id)?.addEventListener("change", updateActivePortfolioMode));
   el("activePortfolioFutuSync")?.addEventListener("change", updateActivePortfolioMode);
   target.querySelectorAll("[data-clone-mode]").forEach((button) => {
     button.addEventListener("click", () => cloneActivePortfolio(button.dataset.cloneMode));
@@ -725,6 +814,14 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
       event.preventDefault();
       savePortfolioCash();
     }
+  });
+  ["activePortfolioFxUSD", "activePortfolioFxCNY", "activePortfolioFxCNH"].forEach((id) => {
+    el(id)?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        savePortfolioFx();
+      }
+    });
   });
 }
 
@@ -798,7 +895,13 @@ function tradeOperationFromTrade(trade) {
     currency: trade.currency,
     decision_id: trade.decision_id,
     trade_id: trade.id,
-    payload: { reason: trade.reason, realized_pnl: trade.realized_pnl },
+    payload: {
+      reason: trade.reason,
+      realized_pnl: trade.realized_pnl,
+      fees: trade.fees,
+      fee_model: trade.fee_model,
+      fee_details: trade.fee_details,
+    },
     created_at: trade.created_at,
   };
 }
@@ -859,6 +962,7 @@ function renderPortfolioOperations(portfolio) {
         row.code,
         row.decision_id ? `决策 ${row.decision_id}` : "",
         row.currency,
+        row.payload?.fees ? `费用 ${fmt(row.payload.fees)}` : "",
       ].filter(Boolean).join(" · ");
       const reason = row.payload?.reason || row.summary || "";
       return `
@@ -1257,7 +1361,11 @@ function drawEquityChart(curves) {
     .map((curve) => ({
       ...curve,
       points: (curve.points || [])
-        .map((point) => ({ ...point, x: Date.parse(point.timestamp), y: Number(point.nav_hkd) }))
+        .map((point) => ({
+          ...point,
+          x: Date.parse(point.timestamp),
+          y: Number(point.performance_nav_hkd ?? point.flow_adjusted_nav_hkd ?? point.nav_hkd),
+        }))
         .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && point.y > 0),
     }))
     .filter((curve) => curve.points.length);
@@ -2057,6 +2165,8 @@ function renderDecisionDetail(row) {
         ["模式", application?.mode],
         ["消息", application?.message],
         ["流水", application?.trade ? `${application.trade.side} ${application.trade.qty} ${application.trade.code} @ ${application.trade.price}` : ""],
+        ["费用", renderTradeFees(application?.trade)],
+        ["费用模型", application?.trade?.fee_model || ""],
         ["现金变动", renderCashEffects(application?.trade?.cash_effects)],
         ["换汇", application?.trade?.fx?.source_amount ? `${application.trade.fx.source_amount} ${application.trade.fx.source_currency} -> ${application.trade.fx.target_amount} ${application.trade.fx.target_currency} · ${application.trade.fx.source || ""}` : ""],
       ])
@@ -2452,8 +2562,73 @@ async function savePortfolioCash() {
   }
 }
 
+async function savePortfolioFx() {
+  if (!state.activePortfolioId) return;
+  const fxToHkd = {
+    HKD: 1,
+    USD: Number(el("activePortfolioFxUSD")?.value || 0),
+    CNY: Number(el("activePortfolioFxCNY")?.value || 0),
+    CNH: Number(el("activePortfolioFxCNH")?.value || 0),
+  };
+  if (!Number.isFinite(fxToHkd.USD) || fxToHkd.USD <= 0) {
+    el("activePortfolioFxUSD")?.focus();
+    return;
+  }
+  try {
+    const payload = await api("/api/portfolios/fx", {
+      method: "POST",
+      body: JSON.stringify({
+        portfolio_id: state.activePortfolioId,
+        fx_to_hkd: fxToHkd,
+      }),
+    });
+    renderPortfolios(payload);
+    await refreshEvaluation();
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+function optionalNumberInput(id) {
+  const value = el(id)?.value;
+  if (value === undefined || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function portfolioRiskOverridesFromForm(base = {}) {
+  const risk = JSON.parse(JSON.stringify(base || {}));
+  risk.max_order_value = { ...(risk.max_order_value || {}) };
+  const maxOrderUS = optionalNumberInput("activePortfolioRiskMaxOrderUS");
+  const maxOrderHK = optionalNumberInput("activePortfolioRiskMaxOrderHK");
+  if (maxOrderUS !== null) risk.max_order_value.US = maxOrderUS;
+  else delete risk.max_order_value.US;
+  if (maxOrderHK !== null) risk.max_order_value.HK = maxOrderHK;
+  else delete risk.max_order_value.HK;
+  if (!Object.keys(risk.max_order_value).length) delete risk.max_order_value;
+  const maxPositionPct = optionalNumberInput("activePortfolioRiskMaxPositionPct");
+  const maxEquityPct = optionalNumberInput("activePortfolioRiskMaxEquityPct");
+  const minCashPct = optionalNumberInput("activePortfolioRiskMinCashPct");
+  if (maxPositionPct !== null) risk.max_position_pct = maxPositionPct;
+  else delete risk.max_position_pct;
+  if (maxEquityPct !== null) risk.max_equity_exposure_pct = maxEquityPct;
+  else delete risk.max_equity_exposure_pct;
+  if (minCashPct !== null) risk.min_cash_pct = minCashPct;
+  else delete risk.min_cash_pct;
+  const maxTradesPerDay = optionalNumberInput("activePortfolioMaxTradesPerDay");
+  const cooldownMinutes = optionalNumberInput("activePortfolioCooldownMinutes");
+  if (maxTradesPerDay !== null) risk.max_trades_per_day = Math.floor(maxTradesPerDay);
+  else delete risk.max_trades_per_day;
+  if (cooldownMinutes !== null) risk.cooldown_minutes = Math.floor(cooldownMinutes);
+  else delete risk.cooldown_minutes;
+  return risk;
+}
+
 async function updateActivePortfolioMode() {
   if (!state.activePortfolioId) return;
+  const portfolio = activePortfolio();
+  const currentHypothesis = portfolio?.strategy_hypothesis || {};
   try {
     const payload = await api("/api/portfolios/settings", {
       method: "POST",
@@ -2466,6 +2641,13 @@ async function updateActivePortfolioMode() {
           .split(/[，,]/)
           .map((item) => item.trim())
           .filter(Boolean),
+        strategy_hypothesis: {
+          ...currentHypothesis,
+          benchmark: (el("activePortfolioBenchmark")?.value || "").trim(),
+          hypothesis: (el("activePortfolioHypothesis")?.value || "").trim(),
+        },
+        prompt_template: (el("activePortfolioPromptTemplate")?.value || "").trim(),
+        risk_overrides: portfolioRiskOverridesFromForm(portfolio?.risk_overrides || {}),
         futu_sync_enabled: Boolean(el("activePortfolioFutuSync")?.checked),
       }),
     });

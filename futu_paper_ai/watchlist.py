@@ -7,16 +7,18 @@ from typing import Any
 
 from .config import PROJECT_ROOT
 from .models import infer_market
+from .storage import atomic_write_text, file_lock
 
 
 DEFAULT_WATCHLIST_PATH = PROJECT_ROOT / "data" / "watchlist.default.json"
 USER_WATCHLIST_PATH = PROJECT_ROOT / "data" / "state" / "watchlist.user.json"
 DEFAULT_USER_WATCHLIST = [
-    {"code": "US.NVDA", "name": "NVIDIA", "sector": "AI Chips"},
-    {"code": "US.AAPL", "name": "Apple", "sector": "Consumer Electronics"},
-    {"code": "US.TSLA", "name": "Tesla", "sector": "EV"},
-    {"code": "HK.00700", "name": "Tencent", "sector": "Internet"},
-    {"code": "HK.09988", "name": "Alibaba", "sector": "E-commerce"},
+    {"code": "US.NVDA", "name": "NVIDIA", "sector": "AI Chips", "tier": "core", "role": "trade"},
+    {"code": "US.MSFT", "name": "Microsoft", "sector": "AI Software", "tier": "core", "role": "trade"},
+    {"code": "US.TSLA", "name": "Tesla", "sector": "EV", "tier": "core", "role": "trade"},
+    {"code": "US.PDD", "name": "PDD Holdings", "sector": "China E-commerce", "tier": "core", "role": "trade"},
+    {"code": "HK.00700", "name": "Tencent", "sector": "China Internet", "tier": "core", "role": "trade"},
+    {"code": "HK.09988", "name": "Alibaba", "sector": "China E-commerce", "tier": "core", "role": "trade"},
 ]
 
 
@@ -26,6 +28,8 @@ class WatchItem:
     name: str
     sector: str
     market: str
+    tier: str = "opportunity"
+    role: str = "trade"
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "WatchItem":
@@ -35,6 +39,8 @@ class WatchItem:
             name=str(payload.get("name", "")).strip(),
             sector=str(payload.get("sector", "Other")).strip(),
             market=str(payload.get("market", infer_market(code))).strip().upper(),
+            tier=str(payload.get("tier") or "opportunity").strip().lower(),
+            role=str(payload.get("role") or "trade").strip().lower(),
         )
 
 
@@ -67,7 +73,8 @@ def save_user_watchlist(items: list[WatchItem], path: Path | None = None) -> Non
     for item in items:
         deduped[item.code] = item
     payload = [item.__dict__ for item in sorted(deduped.values(), key=lambda row: row.code)]
-    watchlist_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with file_lock(watchlist_path):
+        atomic_write_text(watchlist_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def add_user_watch(code: str, name: str = "", sector: str = "Other") -> list[WatchItem]:

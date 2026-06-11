@@ -5,6 +5,12 @@ Futu OpenAPI paper-trading helper for AI-generated order intents.
 This project is intentionally paper-only. It always sends orders with
 `TrdEnv.SIMULATE` and does not use any real-trading unlock password.
 
+## Current System Map
+
+The current design, experiment matrix, news-to-factor roadmap, and observation
+discipline are summarized in [`SYSTEM_OVERVIEW.md`](SYSTEM_OVERVIEW.md).
+Use that document first when returning to the project after a break.
+
 ## What You Need To Provide
 
 1. A Futu / Futubull account that can log in to OpenD.
@@ -67,9 +73,14 @@ Run continuous Gemini paper automation:
 python -m futu_paper_ai ai-loop --execute
 ```
 
-The auto loop observes the 100-code watchlist, selects a small candidate set
-from quote snapshots, asks Gemini for BUY / SELL / HOLD with reasons, and only
-submits paper orders after risk checks pass.
+The auto loop observes the tiered learning watchlist, selects a small candidate
+set from quote snapshots, asks Gemini for BUY / SELL / HOLD with reasons, and
+only submits paper orders after risk checks pass.
+It now follows configured market windows: HK/CN/US regular sessions can scan
+and apply local AI orders, pre-open windows can scan and prepare decisions, and
+closed/weekend windows are skipped. The local ledger also blocks AI/manual
+decision applications outside regular sessions, while user-recorded real broker
+trades and Futu fill write-backs remain recordable.
 
 Gemini decisions default to `GEMINI_AGENT_MODE=multi_lite`. This keeps the
 existing single-call Gemini workflow, but asks the model to fill a
@@ -85,9 +96,11 @@ Each portfolio has an AI application mode: `observe` only records decisions,
 and `auto` applies risk-approved AI orders to the local portfolio ledger. Local
 applications update `data/state/portfolios.json`, write a trade record, and do
 not submit Futu orders unless that portfolio has Futu paper sync enabled. Each
-portfolio can be marked as a paper experiment or an actual-position mirror; AI
-prompts use that flag so actual holdings are treated as the user's real
-broker-position mirror, not as a teaching simulation. Portfolio actions are also
+portfolio can be marked as a paper experiment or an actual-position mirror, and
+can carry its own strategy hypothesis, prompt template, and risk overrides for
+multi-strategy experiments. AI prompts use that flag so actual holdings are
+treated as the user's real broker-position mirror, not as a teaching simulation.
+Portfolio actions are also
 kept in an operation log covering snapshot edits, cash edits, user-recorded
 broker trades, AI manual applies, AI auto applies, and Futu fill write-backs.
 When sync is enabled, applying an AI order first submits a Futu SIMULATE order
@@ -96,19 +109,37 @@ local ledger. Local buys use broker-like buying power: they spend the trade
 currency first and can auto-convert base-currency cash using the stored FX table
 when the trade currency balance is insufficient. The app now probes Futu OpenD
 FX snapshots first; if the current OpenD/account setup does not support FX
-quotes, it falls back to the local HKD table and records that source in
-portfolio payloads and trade logs. US stock snapshots also keep Futu's
+quotes, it uses a no-key third-party FX feed as the automatic fallback. Each
+portfolio can still override that with a broker-calibrated HKD FX table entered
+from the portfolio page; only portfolios without live/third-party/manual FX fall
+back to the local HKD defaults. The chosen FX source is recorded in portfolio
+payloads and trade logs.
+US stock snapshots also keep Futu's
 pre-market, after-hours, and overnight fields as `extended_session` sentiment
 signals; regular `last_price` / bid / ask remain the trade and valuation price
-sources.
+sources. Extended-session data is used to prepare regular-session decisions,
+not to simulate after-hours fills.
+
+Local fills use a USMART/盈立 standard-commission fee model from the user's
+current fee screenshots: HK stocks include commission, platform fee, exchange
+fee, settlement fee, SFC/FRC levies, and stamp duty; US stocks include the
+per-share platform fee plus clearing/CAT fees, with SEC and FINRA TAF on sells.
+The ledger stores both the total fee and per-item `fee_details`, and buy cost
+basis / sell realized P&L include those fees.
 
 Candidate selection is two-stage:
 
-1. Rank the 100-code watchlist by market activity:
+1. Rank the tradeable watchlist by market activity, then apply tier boosts:
    `abs(change_pct) * 2.8 + amplitude * 0.8 + max(volume_ratio - 1, 0) * 4 + log10(turnover) * 0.35`.
-2. If recent autoNews signals match a watchlist ticker, boost that ticker into
-   the candidate set so Gemini sees both the relevant news and the matching
-   quote snapshot.
+   `core` and current holdings get structural priority; `macro` anchors are
+   passed to the prompt as market context and do not compete for BUY / SELL.
+2. If recent autoNews signals match a watchlist ticker, force that ticker toward
+   the top of the candidate set so Gemini sees both the relevant news and the
+   matching quote snapshot, even if the quote itself is quiet.
+3. If a tradeable watchlist ticker trips explicit abnormal-move triggers
+   (daily move, volume ratio, amplitude, or extended-hours move), force it into
+   the candidate competition as an exception worth checking. Holdings are also
+   force-prioritized for portfolio decisions. `macro` anchors stay context-only.
 
 autoNews notes are filtered by relevance before they reach Gemini: current
 candidate matches first, then watchlist matches, then high-impact macro signals.

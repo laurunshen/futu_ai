@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import time
@@ -7,11 +8,12 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.request import Request, urlopen
 
 from .config import AppConfig, PROJECT_ROOT
 from .market_data import extended_session_from_quote
 from .models import OrderIntent
-from .portfolios import DEFAULT_FX_TO_HKD
+from .portfolios import DEFAULT_FX_TO_HKD, LOCAL_DEFAULT_FX_SOURCE, THIRD_PARTY_FX_SOURCE
 from .risk import RiskDecision, RiskEngine
 
 
@@ -59,6 +61,50 @@ def _quote_price(row: dict[str, Any]) -> float:
         if price > 0:
             return price
     return 0.0
+
+
+def _http_json(url: str, timeout: float = 4.0) -> dict[str, Any] | list[Any]:
+    request = Request(url, headers={"User-Agent": "futu-paper-ai/1.0"})
+    with urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _third_party_payload_from_usd_rates(
+    *,
+    provider: str,
+    updated_at: str,
+    rates_from_usd: dict[str, float],
+    raw: Any,
+) -> dict[str, Any]:
+    usd_hkd = _float(rates_from_usd.get("HKD"), 0)
+    usd_cny = _float(rates_from_usd.get("CNY"), 0)
+    usd_cnh = _float(rates_from_usd.get("CNH"), 0)
+    if usd_hkd <= 0:
+        raise ValueError(f"{provider} returned no USD/HKD rate")
+
+    rates = dict(DEFAULT_FX_TO_HKD)
+    rates["USD"] = usd_hkd
+    if usd_cny > 0:
+        rates["CNY"] = usd_hkd / usd_cny
+    if usd_cnh > 0:
+        rates["CNH"] = usd_hkd / usd_cnh
+    elif usd_cny > 0:
+        rates["CNH"] = usd_hkd / usd_cny
+
+    return {
+        "ok": True,
+        "source": THIRD_PARTY_FX_SOURCE,
+        "provider": provider,
+        "fx_to_hkd": {currency: round(value, 6) for currency, value in sorted(rates.items())},
+        "quotes": [
+            {"code": "USDHKD", "price": round(usd_hkd, 8), "provider": provider},
+            {"code": "USDCNY", "price": round(usd_cny, 8) if usd_cny > 0 else None, "provider": provider},
+            {"code": "USDCNH", "price": round(usd_cnh, 8) if usd_cnh > 0 else None, "provider": provider},
+        ],
+        "error": "",
+        "updated_at": updated_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "raw": raw,
+    }
 
 
 class FutuPaperClient:
@@ -129,7 +175,7 @@ class FutuPaperClient:
         ]
         payload: dict[str, Any] = {
             "ok": False,
-            "source": "local_default_fx_to_hkd",
+            "source": LOCAL_DEFAULT_FX_SOURCE,
             "fx_to_hkd": defaults,
             "attempted_codes": codes,
             "quotes": [],
@@ -141,23 +187,23 @@ class FutuPaperClient:
                 pass
         except OSError as exc:
             payload["error"] = f"OpenD unavailable: {exc}"
-            return payload
+            return self._third_party_fx_rates_to_hkd(payload)
 
         try:
             with self.quote_context() as ctx:
                 ret, data = ctx.get_market_snapshot(codes)
         except Exception as exc:
             payload["error"] = str(exc)
-            return payload
+            return self._third_party_fx_rates_to_hkd(payload)
 
         if ret != futu.RET_OK:
             payload["error"] = str(data)
-            return payload
+            return self._third_party_fx_rates_to_hkd(payload)
 
         rows = _records(data)
         if not isinstance(rows, list):
             payload["error"] = "Futu FX snapshot returned an unexpected payload."
-            return payload
+            return self._third_party_fx_rates_to_hkd(payload)
 
         rates = dict(defaults)
         live_pairs: dict[str, float] = {}
@@ -199,7 +245,7 @@ class FutuPaperClient:
         if not live_pairs:
             payload["quotes"] = quote_rows
             payload["error"] = "Futu FX snapshot returned no usable HKD cross rates."
-            return payload
+            return self._third_party_fx_rates_to_hkd(payload)
 
         payload.update(
             {
@@ -212,6 +258,66 @@ class FutuPaperClient:
             }
         )
         return payload
+
+    def _third_party_fx_rates_to_hkd(self, base_payload: dict[str, Any]) -> dict[str, Any]:
+        errors = [str(base_payload.get("error") or "").strip()]
+        try:
+            data = _http_json("https://api.frankfurter.dev/v2/rates?base=USD&quotes=HKD,CNY,CNH")
+            rates: dict[str, float] = {}
+            if isinstance(data, dict):
+                raw_rates = data.get("rates")
+                if isinstance(raw_rates, dict):
+                    rates = {str(currency).upper(): _float(value, 0) for currency, value in raw_rates.items()}
+                updated_at = str(data.get("date") or "")
+            elif isinstance(data, list):
+                updated_at = ""
+                for row in data:
+                    if not isinstance(row, dict):
+                        continue
+                    quote = str(row.get("quote") or "").upper()
+                    rate = _float(row.get("rate"), 0)
+                    if quote and rate > 0:
+                        rates[quote] = rate
+                    updated_at = str(row.get("date") or updated_at)
+            else:
+                raise ValueError("unexpected Frankfurter payload")
+            result = _third_party_payload_from_usd_rates(
+                provider="frankfurter.dev",
+                updated_at=updated_at,
+                rates_from_usd=rates,
+                raw=data,
+            )
+            result["upstream_error"] = "; ".join(error for error in errors if error)
+            return result
+        except Exception as exc:
+            errors.append(f"frankfurter.dev: {exc}")
+
+        try:
+            data = _http_json("https://open.er-api.com/v6/latest/USD")
+            if not isinstance(data, dict) or data.get("result") != "success":
+                raise ValueError("unexpected open.er-api payload")
+            raw_rates = data.get("rates")
+            if not isinstance(raw_rates, dict):
+                raise ValueError("open.er-api returned no rates")
+            result = _third_party_payload_from_usd_rates(
+                provider="open.er-api.com",
+                updated_at=str(data.get("time_last_update_utc") or ""),
+                rates_from_usd={str(currency).upper(): _float(value, 0) for currency, value in raw_rates.items()},
+                raw={
+                    "provider": data.get("provider"),
+                    "time_last_update_utc": data.get("time_last_update_utc"),
+                    "time_next_update_utc": data.get("time_next_update_utc"),
+                },
+            )
+            result["upstream_error"] = "; ".join(error for error in errors if error)
+            return result
+        except Exception as exc:
+            errors.append(f"open.er-api.com: {exc}")
+
+        return {
+            **base_payload,
+            "error": "; ".join(error for error in errors if error),
+        }
 
     def account(self, market: str, currency: str) -> dict[str, Any]:
         futu = _load_futu(self.config.use_system_home)

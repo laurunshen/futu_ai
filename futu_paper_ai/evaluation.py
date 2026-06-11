@@ -8,7 +8,8 @@ from typing import Any
 
 from .config import STATE_ROOT
 from .models import infer_market
-from .portfolios import DEFAULT_FX_TO_HKD
+from .portfolios import DEFAULT_FX_TO_HKD, effective_fx_payload
+from .storage import atomic_write_text, file_lock
 
 
 FOLLOWUPS_PATH = STATE_ROOT / "decision_followups.json"
@@ -331,10 +332,11 @@ def build_decision_review_baseline(
 def _load_followups() -> dict[str, Any]:
     if not FOLLOWUPS_PATH.exists():
         return {"schema_version": 1, "measurements": {}}
-    try:
-        payload = json.loads(FOLLOWUPS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"schema_version": 1, "measurements": {}}
+    with file_lock(FOLLOWUPS_PATH, exclusive=False):
+        try:
+            payload = json.loads(FOLLOWUPS_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"schema_version": 1, "measurements": {}}
     if not isinstance(payload, dict):
         return {"schema_version": 1, "measurements": {}}
     measurements = payload.get("measurements")
@@ -347,16 +349,18 @@ def _load_followups() -> dict[str, Any]:
 def _save_followups(payload: dict[str, Any]) -> None:
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     payload["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
-    FOLLOWUPS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with file_lock(FOLLOWUPS_PATH):
+        atomic_write_text(FOLLOWUPS_PATH, json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _load_nav_history() -> dict[str, Any]:
     if not NAV_HISTORY_PATH.exists():
         return {"schema_version": 1, "snapshots": {}}
-    try:
-        payload = json.loads(NAV_HISTORY_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"schema_version": 1, "snapshots": {}}
+    with file_lock(NAV_HISTORY_PATH, exclusive=False):
+        try:
+            payload = json.loads(NAV_HISTORY_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"schema_version": 1, "snapshots": {}}
     if not isinstance(payload, dict):
         return {"schema_version": 1, "snapshots": {}}
     snapshots = payload.get("snapshots")
@@ -369,7 +373,8 @@ def _load_nav_history() -> dict[str, Any]:
 def _save_nav_history(payload: dict[str, Any]) -> None:
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     payload["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
-    NAV_HISTORY_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with file_lock(NAV_HISTORY_PATH):
+        atomic_write_text(NAV_HISTORY_PATH, json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _history_bucket(timestamp: str) -> str:
@@ -402,6 +407,9 @@ def update_nav_history(
             "cash_hkd": round(_num(nav.get("cash_hkd"), 0), 4),
             "market_value_hkd": round(_num(nav.get("market_value_hkd"), 0), 4),
             "unrealized_pnl_hkd": round(_num(nav.get("unrealized_pnl_hkd"), 0), 4),
+            "fx_source": str(nav.get("fx_source") or ""),
+            "fx_to_hkd": dict(nav.get("fx_to_hkd") or {}),
+            "cash": list(nav.get("cash") or []),
             "estimated": bool(nav.get("estimated")),
             "source": "valuation_snapshot",
         }
@@ -428,8 +436,19 @@ def _measurement_from_quote(
     now: datetime,
 ) -> dict[str, Any] | None:
     baseline_price = _num(baseline.get("price"), 0)
-    measured_price = quote_price(quote_by_code.get(code))
+    quote_row = quote_by_code.get(code) or {}
+    measured_price = quote_price(quote_row)
     if not code or baseline_price <= 0 or measured_price <= 0:
+        return None
+    quote_update_time = str(
+        quote_row.get("update_time")
+        or quote_row.get("updated_at")
+        or quote_row.get("quote_update_time")
+        or quote_row.get("timestamp")
+        or ""
+    )
+    quote_dt = _parse_dt(quote_update_time)
+    if quote_dt and quote_dt < due_at:
         return None
     returns = _return_payload(entry, baseline_price, measured_price)
     return {
@@ -438,9 +457,13 @@ def _measurement_from_quote(
         "due_at": _iso(due_at),
         "measured_at": _iso(now),
         "baseline_price": round(baseline_price, 4),
+        "baseline_source": str(baseline.get("source") or ""),
+        "baseline_update_time": str(baseline.get("update_time") or ""),
         "measured_price": round(measured_price, 4),
         "currency": str(baseline.get("currency") or _currency_for_code(code)).upper(),
         "price_source": "Futu OpenD snapshot at first due check",
+        "quote_update_time": quote_update_time,
+        "quote_time_validated": bool(quote_dt),
         "measurement_timing": "first_available_after_due",
         **returns,
     }
@@ -730,7 +753,19 @@ def _portfolio_trade_stats(portfolio: dict[str, Any], rates: dict[str, float]) -
     }
 
 
-def _trade_attribution(portfolios: list[dict[str, Any]], rates: dict[str, float]) -> dict[str, Any]:
+def _rates_for_portfolio(
+    portfolio: dict[str, Any],
+    rates_by_portfolio: dict[str, dict[str, float]],
+    fallback_rates: dict[str, float],
+) -> dict[str, float]:
+    return rates_by_portfolio.get(str(portfolio.get("id") or ""), fallback_rates)
+
+
+def _trade_attribution(
+    portfolios: list[dict[str, Any]],
+    rates_by_portfolio: dict[str, dict[str, float]],
+    fallback_rates: dict[str, float],
+) -> dict[str, Any]:
     buckets: dict[str, dict[str, Any]] = {}
     portfolio_ids_by_source: dict[str, set[str]] = {}
     total_trade_count = 0
@@ -738,6 +773,7 @@ def _trade_attribution(portfolios: list[dict[str, Any]], rates: dict[str, float]
     total_realized_pnl_hkd = 0.0
     for portfolio in portfolios:
         portfolio_id = str(portfolio.get("id") or "")
+        rates = _rates_for_portfolio(portfolio, rates_by_portfolio, fallback_rates)
         for trade in [item for item in portfolio.get("trades") or [] if isinstance(item, dict)]:
             source = str(trade.get("source") or "unknown").lower()
             bucket = buckets.setdefault(source, _new_trade_source_bucket(source))
@@ -878,11 +914,16 @@ def _finalize_execution_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _futu_execution_quality(portfolios: list[dict[str, Any]], rates: dict[str, float]) -> dict[str, Any]:
+def _futu_execution_quality(
+    portfolios: list[dict[str, Any]],
+    rates_by_portfolio: dict[str, dict[str, float]],
+    fallback_rates: dict[str, float],
+) -> dict[str, Any]:
     total = _new_execution_summary()
     portfolio_rows: list[dict[str, Any]] = []
     recent_orders: list[dict[str, Any]] = []
     for portfolio in portfolios:
+        rates = _rates_for_portfolio(portfolio, rates_by_portfolio, fallback_rates)
         portfolio_summary = _new_execution_summary(portfolio)
         for raw_order in [item for item in portfolio.get("futu_sync_orders") or [] if isinstance(item, dict)]:
             order = dict(raw_order)
@@ -901,21 +942,89 @@ def _futu_execution_quality(portfolios: list[dict[str, Any]], rates: dict[str, f
     }
 
 
-def _curve_stats(points: list[dict[str, Any]]) -> dict[str, Any]:
-    navs = [_num(point.get("nav_hkd"), 0) for point in points if _num(point.get("nav_hkd"), 0) > 0]
-    if not navs:
+def _external_cash_flows(portfolio: dict[str, Any], rates: dict[str, float]) -> list[dict[str, Any]]:
+    flows: list[dict[str, Any]] = []
+    for operation in portfolio.get("operations") or []:
+        if not isinstance(operation, dict) or str(operation.get("type") or "") != "cash":
+            continue
+        payload = operation.get("payload") if isinstance(operation.get("payload"), dict) else {}
+        currency = str(operation.get("currency") or payload.get("currency") or portfolio.get("base_currency") or "HKD").upper()
+        if "cash_flow" in payload:
+            amount = _num(payload.get("cash_flow"), 0)
+        else:
+            amount = _num(payload.get("to"), 0) - _num(payload.get("from"), 0)
+        if abs(amount) <= 1e-9:
+            continue
+        amount_hkd = _num(payload.get("cash_flow_hkd"), 0)
+        if abs(amount_hkd) <= 1e-9:
+            amount_hkd = _to_hkd(amount, currency, rates)
+        timestamp = str(operation.get("created_at") or "")
+        if not timestamp:
+            continue
+        flows.append(
+            {
+                "timestamp": timestamp,
+                "amount": round(amount, 4),
+                "currency": currency,
+                "amount_hkd": round(amount_hkd, 4),
+            }
+        )
+    flows.sort(key=lambda item: str(item.get("timestamp") or ""))
+    return flows
+
+
+def _has_investment_activity(portfolio: dict[str, Any]) -> bool:
+    for position in portfolio.get("positions") or []:
+        if isinstance(position, dict) and _num(position.get("qty"), 0) > 0:
+            return True
+    if any(isinstance(trade, dict) for trade in portfolio.get("trades") or []):
+        return True
+    if any(isinstance(order, dict) for order in portfolio.get("futu_sync_orders") or []):
+        return True
+    return False
+
+
+def _stats_from_values(values: list[float]) -> dict[str, Any]:
+    if not values:
         return {"return_pct": None, "max_drawdown_pct": None}
-    first = navs[0]
-    last = navs[-1]
-    peak = navs[0]
+    first = values[0]
+    last = values[-1]
+    peak = values[0]
     max_drawdown = 0.0
-    for nav in navs:
-        peak = max(peak, nav)
+    for value in values:
+        peak = max(peak, value)
         if peak > 0:
-            max_drawdown = min(max_drawdown, (nav - peak) / peak * 100)
+            max_drawdown = min(max_drawdown, (value - peak) / peak * 100)
     return {
         "return_pct": round((last - first) / first * 100, 4) if first > 0 else None,
         "max_drawdown_pct": round(max_drawdown, 4),
+    }
+
+
+def _curve_stats(points: list[dict[str, Any]]) -> dict[str, Any]:
+    raw_navs = [_num(point.get("nav_hkd"), 0) for point in points if _num(point.get("nav_hkd"), 0) > 0]
+    adjusted_navs = [
+        _num(point.get("flow_adjusted_nav_hkd"), 0)
+        for point in points
+        if _num(point.get("flow_adjusted_nav_hkd"), 0) > 0
+    ]
+    if not raw_navs:
+        return {"return_pct": None, "max_drawdown_pct": None}
+    raw_stats = _stats_from_values(raw_navs)
+    adjusted_stats = _stats_from_values(adjusted_navs) if adjusted_navs else raw_stats
+    period_flows = [_num(point.get("period_external_cash_flow_hkd"), 0) for point in points]
+    total_flow = sum(period_flows)
+    has_external_flow = any(abs(value) > 1e-9 for value in period_flows)
+    cash_only_adjustments = [_num(point.get("non_trading_cash_adjustment_hkd"), 0) for point in points]
+    has_cash_only_adjustment = any(abs(value) > 1e-9 for value in cash_only_adjustments)
+    return {
+        **adjusted_stats,
+        "raw_return_pct": raw_stats.get("return_pct"),
+        "raw_max_drawdown_pct": raw_stats.get("max_drawdown_pct"),
+        "external_cash_flow_hkd": round(total_flow, 4),
+        "cash_flow_adjusted": has_external_flow,
+        "non_trading_cash_adjustment_hkd": round(cash_only_adjustments[-1], 4) if cash_only_adjustments else 0.0,
+        "cash_only_adjusted": has_cash_only_adjustment,
     }
 
 
@@ -924,6 +1033,7 @@ def _equity_curve_for_portfolio(
     entries: list[dict[str, Any]],
     current_nav: dict[str, Any],
     nav_history: dict[str, Any],
+    rates: dict[str, float],
     *,
     now: datetime,
 ) -> dict[str, Any]:
@@ -941,6 +1051,8 @@ def _equity_curve_for_portfolio(
             {
                 "timestamp": timestamp,
                 "nav_hkd": round(nav, 4),
+                "cash_hkd": round(_num(history_point.get("cash_hkd"), 0), 4),
+                "market_value_hkd": round(_num(history_point.get("market_value_hkd"), 0), 4),
                 "source": str(history_point.get("source") or "valuation_snapshot"),
                 "estimated": bool(history_point.get("estimated")),
             }
@@ -969,16 +1081,50 @@ def _equity_curve_for_portfolio(
             {
                 "timestamp": current_timestamp,
                 "nav_hkd": current_nav.get("nav_hkd"),
+                "cash_hkd": current_nav.get("cash_hkd"),
+                "market_value_hkd": current_nav.get("market_value_hkd"),
                 "source": "current_mark_to_market",
                 "estimated": bool(current_nav.get("estimated")),
             }
         )
     points.sort(key=lambda item: str(item.get("timestamp") or ""))
     if points:
+        flows = _external_cash_flows(portfolio, rates)
+        first_dt = _parse_dt(points[0].get("timestamp"))
+        cumulative_flow = 0.0
+        flow_index = 0
         first = _num(points[0].get("nav_hkd"), 0)
+        first_adjusted = first
         for point in points:
+            point_dt = _parse_dt(point.get("timestamp"))
+            period_flow = 0.0
+            while flow_index < len(flows):
+                flow = flows[flow_index]
+                flow_dt = _parse_dt(flow.get("timestamp"))
+                if point_dt and flow_dt and flow_dt > point_dt:
+                    break
+                flow_index += 1
+                if first_dt and flow_dt and flow_dt <= first_dt:
+                    continue
+                amount_hkd = _num(flow.get("amount_hkd"), 0)
+                cumulative_flow += amount_hkd
+                period_flow += amount_hkd
             nav = _num(point.get("nav_hkd"), 0)
-            point["return_pct"] = round((nav - first) / first * 100, 4) if first > 0 else None
+            adjusted_nav = nav - cumulative_flow
+            point["period_external_cash_flow_hkd"] = round(period_flow, 4)
+            point["external_cash_flow_hkd"] = round(cumulative_flow, 4)
+            point["flow_adjusted_nav_hkd"] = round(adjusted_nav, 4)
+            point["performance_nav_hkd"] = round(adjusted_nav, 4)
+            point["raw_return_pct"] = round((nav - first) / first * 100, 4) if first > 0 else None
+            point["return_pct"] = round((adjusted_nav - first_adjusted) / first_adjusted * 100, 4) if first_adjusted > 0 else None
+        if not _has_investment_activity(portfolio):
+            baseline = first_adjusted if first_adjusted > 0 else first
+            for point in points:
+                nav = _num(point.get("nav_hkd"), 0)
+                point["non_trading_cash_adjustment_hkd"] = round(nav - baseline, 4)
+                point["flow_adjusted_nav_hkd"] = round(baseline, 4)
+                point["performance_nav_hkd"] = round(baseline, 4)
+                point["return_pct"] = 0.0
     return {"portfolio_id": portfolio_id, "points": points, "stats": _curve_stats(points)}
 
 
@@ -1119,6 +1265,8 @@ def _ab_test_summary(
                 "apply_mode": str(summary.get("apply_mode") or "manual"),
                 "strategy_profile": str(summary.get("strategy_profile") or ""),
                 "strategy_tags": list(summary.get("strategy_tags") or []),
+                "strategy_hypothesis": dict(summary.get("strategy_hypothesis") or {}),
+                "risk_overrides": dict(summary.get("risk_overrides") or {}),
                 "initial_nav_hkd": round(first_nav, 4) if first_nav > 0 else None,
                 "nav_hkd": nav.get("nav_hkd"),
                 "return_pct": (curve.get("stats") or {}).get("return_pct"),
@@ -1232,12 +1380,17 @@ def build_evaluation_payload(
         filtered_entries.append(entry)
 
     followups = update_due_followups(filtered_entries, quote_by_code, now=now)
-    rates = _rates_to_hkd(fx_payload)
+    fallback_rates = _rates_to_hkd(fx_payload)
     portfolio_summaries: list[dict[str, Any]] = []
     equity_curves: list[dict[str, Any]] = []
+    rates_by_portfolio: dict[str, dict[str, float]] = {}
     for portfolio in filtered_portfolios:
-        nav = portfolio_nav_snapshot(portfolio, quote_by_code, fx_payload)
-        trade_stats = _portfolio_trade_stats(portfolio, rates)
+        portfolio_fx_payload = effective_fx_payload(portfolio, fx_payload)
+        portfolio_rates = _rates_to_hkd(portfolio_fx_payload)
+        portfolio_id_key = str(portfolio.get("id") or "")
+        rates_by_portfolio[portfolio_id_key] = portfolio_rates
+        nav = portfolio_nav_snapshot(portfolio, quote_by_code, portfolio_fx_payload)
+        trade_stats = _portfolio_trade_stats(portfolio, portfolio_rates)
         portfolio_summaries.append(
             {
                 "id": str(portfolio.get("id") or ""),
@@ -1247,6 +1400,9 @@ def build_evaluation_payload(
                 "parent_id": str(portfolio.get("parent_id") or ""),
                 "strategy_profile": str(portfolio.get("strategy_profile") or ""),
                 "strategy_tags": list(portfolio.get("strategy_tags") or []),
+                "strategy_hypothesis": dict(portfolio.get("strategy_hypothesis") or {}),
+                "prompt_template": str(portfolio.get("prompt_template") or ""),
+                "risk_overrides": dict(portfolio.get("risk_overrides") or {}),
                 "nav": nav,
                 "trade_stats": trade_stats,
             }
@@ -1254,8 +1410,18 @@ def build_evaluation_payload(
 
     nav_history = update_nav_history(portfolio_summaries, now=now)
     for portfolio in filtered_portfolios:
+        portfolio_id_key = str(portfolio.get("id") or "")
         current_nav = next((row.get("nav", {}) for row in portfolio_summaries if row.get("id") == str(portfolio.get("id") or "")), {})
-        equity_curves.append(_equity_curve_for_portfolio(portfolio, filtered_entries, current_nav, nav_history, now=now))
+        equity_curves.append(
+            _equity_curve_for_portfolio(
+                portfolio,
+                filtered_entries,
+                current_nav,
+                nav_history,
+                rates_by_portfolio.get(portfolio_id_key, _rates_to_hkd(fx_payload)),
+                now=now,
+            )
+        )
 
     tracking_rows = _decision_tracking_rows(filtered_entries, quote_by_code, followups, now=now)
     metrics = _decision_metrics(tracking_rows)
@@ -1268,8 +1434,8 @@ def build_evaluation_payload(
         "equity_curves": equity_curves,
         "decision_tracking": tracking_rows,
         "metrics": metrics,
-        "attribution": _trade_attribution(filtered_portfolios, rates),
-        "execution_quality": _futu_execution_quality(filtered_portfolios, rates),
+        "attribution": _trade_attribution(filtered_portfolios, rates_by_portfolio, fallback_rates),
+        "execution_quality": _futu_execution_quality(filtered_portfolios, rates_by_portfolio, fallback_rates),
         "ab_tests": _ab_test_summary(filtered_portfolios, portfolio_summaries, equity_curves, tracking_rows),
         "strategy_breakdown": _strategy_breakdown(portfolio_summaries, tracking_rows),
         "news_effect": _news_effect_summary(tracking_rows),

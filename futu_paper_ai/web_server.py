@@ -19,6 +19,7 @@ from .config import AppConfig, PROJECT_ROOT, public_config, save_runtime_risk_co
 from .evaluation import build_evaluation_payload, collect_evaluation_codes, decision_evaluation_id
 from .futu_client import FutuPaperClient, _load_futu
 from .futu_sync import apply_order_with_optional_futu_sync, refresh_futu_sync_orders
+from .market_data import auto_loop_session
 from .models import OrderIntent
 from .news_signals import load_news_signals
 from .portfolios import (
@@ -26,13 +27,16 @@ from .portfolios import (
     create_portfolio,
     delete_portfolio,
     delete_position,
+    effective_fx_payload,
     get_portfolio,
     load_portfolios,
     set_active_portfolio,
     update_portfolio_cash,
+    update_portfolio_fx_rates,
     update_portfolio_settings,
     upsert_position,
 )
+from .storage import atomic_write_text, file_lock
 from .watchlist import add_user_watch, load_user_watchlist, load_watchlist, remove_user_watch
 
 
@@ -90,7 +94,12 @@ def _doctor_payload(config: AppConfig) -> dict[str, Any]:
         checks.append({"name": "OpenD", "ok": False, "target": target, "error": str(exc)})
 
     checks.append({"name": "Paper", "ok": True, "details": "TrdEnv.SIMULATE"})
-    return {"ok": all(check["ok"] for check in checks), "config": public_config(config), "checks": checks}
+    return {
+        "ok": all(check["ok"] for check in checks),
+        "config": public_config(config),
+        "checks": checks,
+        "market_schedule": auto_loop_session(config.gemini.observe_markets),
+    }
 
 
 def _read_decisions(limit: int) -> list[dict[str, Any]]:
@@ -253,23 +262,24 @@ def _mark_decision_application(decision_id: str, application: dict[str, Any]) ->
     if not decision_id or not DECISION_LOG_ROOT.exists():
         return False
     for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl"), reverse=True):
-        changed = False
-        next_lines: list[str] = []
-        for line in log_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                next_lines.append(line)
-                continue
-            if isinstance(entry, dict) and str(entry.get("decision_id") or "") == decision_id:
-                entry["application"] = _jsonable(application)
-                changed = True
-            next_lines.append(json.dumps(entry, ensure_ascii=False) if isinstance(entry, dict) else line)
-        if changed:
-            log_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
-            return True
+        with file_lock(log_path):
+            changed = False
+            next_lines: list[str] = []
+            for line in log_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    next_lines.append(line)
+                    continue
+                if isinstance(entry, dict) and str(entry.get("decision_id") or "") == decision_id:
+                    entry["application"] = _jsonable(application)
+                    changed = True
+                next_lines.append(json.dumps(entry, ensure_ascii=False) if isinstance(entry, dict) else line)
+            if changed:
+                atomic_write_text(log_path, "\n".join(next_lines) + "\n", encoding="utf-8")
+                return True
     return False
 
 
@@ -287,28 +297,29 @@ def _mark_decision_human_review(decision_ref: str, review: dict[str, Any]) -> di
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl"), reverse=True):
-        changed = False
-        next_lines: list[str] = []
-        for line in log_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                next_lines.append(line)
-                continue
-            if not isinstance(entry, dict):
-                next_lines.append(line)
-                continue
-            entry.setdefault("log_date", log_path.stem)
-            evaluation_id = decision_evaluation_id(entry)
-            if str(entry.get("decision_id") or "") == decision_ref or evaluation_id == decision_ref:
-                entry["human_review"] = human_review
-                changed = True
-            next_lines.append(json.dumps(entry, ensure_ascii=False))
-        if changed:
-            log_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
-            return human_review
+        with file_lock(log_path):
+            changed = False
+            next_lines: list[str] = []
+            for line in log_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    next_lines.append(line)
+                    continue
+                if not isinstance(entry, dict):
+                    next_lines.append(line)
+                    continue
+                entry.setdefault("log_date", log_path.stem)
+                evaluation_id = decision_evaluation_id(entry)
+                if str(entry.get("decision_id") or "") == decision_ref or evaluation_id == decision_ref:
+                    entry["human_review"] = human_review
+                    changed = True
+                next_lines.append(json.dumps(entry, ensure_ascii=False))
+            if changed:
+                atomic_write_text(log_path, "\n".join(next_lines) + "\n", encoding="utf-8")
+                return human_review
     raise ValueError("decision not found")
 
 
@@ -587,6 +598,10 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     futu_sync_enabled=bool(payload["futu_sync_enabled"]) if "futu_sync_enabled" in payload else None,
                     strategy_profile=str(payload.get("strategy_profile", "")).strip() or None,
                     strategy_tags=payload.get("strategy_tags") if "strategy_tags" in payload else None,
+                    strategy_hypothesis=payload.get("strategy_hypothesis") if "strategy_hypothesis" in payload else None,
+                    prompt_template=str(payload.get("prompt_template", "")) if "prompt_template" in payload else None,
+                    risk_overrides=payload.get("risk_overrides") if "risk_overrides" in payload else None,
+                    ai_loop_enabled=bool(payload["ai_loop_enabled"]) if "ai_loop_enabled" in payload else None,
                 )
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/cash":
@@ -594,6 +609,12 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     str(payload.get("portfolio_id", "")).strip() or None,
                     payload.get("cash", 0),
                     currency=str(payload.get("currency", "")).strip() or None,
+                )
+                self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/fx":
+                store = update_portfolio_fx_rates(
+                    str(payload.get("portfolio_id", "")).strip() or None,
+                    payload.get("fx_to_hkd") if isinstance(payload.get("fx_to_hkd"), dict) else payload,
                 )
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/position":
@@ -606,9 +627,10 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/trade":
-                fx_payload = self.client.fx_rates_to_hkd()
+                upstream_fx_payload = self.client.fx_rates_to_hkd()
                 portfolio_id = str(payload.get("portfolio_id", "")).strip() or None
                 portfolio = get_portfolio(portfolio_id)
+                fx_payload = effective_fx_payload(portfolio, upstream_fx_payload)
                 application = apply_order_with_optional_futu_sync(
                     client=self.client,
                     portfolio=portfolio,
@@ -646,8 +668,9 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 if not portfolio_id:
                     raise ValueError("portfolio_id is required")
                 decision = entry.get("decision") if isinstance(entry.get("decision"), dict) else {}
-                fx_payload = self.client.fx_rates_to_hkd()
+                upstream_fx_payload = self.client.fx_rates_to_hkd()
                 portfolio = get_portfolio(portfolio_id)
+                fx_payload = effective_fx_payload(portfolio, upstream_fx_payload)
                 application = apply_order_with_optional_futu_sync(
                     client=self.client,
                     portfolio=portfolio,
@@ -699,6 +722,8 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     row.setdefault("code", item.code)
                     row["watch_name"] = item.name
                     row["watch_sector"] = item.sector
+                    row["watch_tier"] = item.tier
+                    row["watch_role"] = item.role
                     row["market"] = item.market
                     quote_rows.append(row)
             else:
@@ -729,7 +754,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
 
     def _portfolio_payload(self, store: dict[str, Any] | None = None) -> dict[str, Any]:
         store = store or load_portfolios()
-        fx_payload = self.client.fx_rates_to_hkd()
+        upstream_fx_payload = self.client.fx_rates_to_hkd()
         futu_sync_results: list[dict[str, Any]] = []
         for portfolio in store.get("portfolios", []):
             if not portfolio.get("futu_sync_enabled"):
@@ -741,13 +766,14 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 if isinstance(order, dict)
             ):
                 continue
+            portfolio_fx_payload = effective_fx_payload(portfolio, upstream_fx_payload)
             futu_sync_results.extend(
                 refresh_futu_sync_orders(
                     client=self.client,
                     portfolio=portfolio,
-                    fx_to_hkd=fx_payload.get("fx_to_hkd"),
-                    fx_source=str(fx_payload.get("source") or ""),
-                    fx_status=fx_payload,
+                    fx_to_hkd=portfolio_fx_payload.get("fx_to_hkd"),
+                    fx_source=str(portfolio_fx_payload.get("source") or ""),
+                    fx_status=portfolio_fx_payload,
                 )
             )
         for sync_result in futu_sync_results:
@@ -770,6 +796,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
         quote_by_code, quote_error = self._quote_map(codes)
         portfolios: list[dict[str, Any]] = []
         for portfolio in store.get("portfolios", []):
+            fx_payload = effective_fx_payload(portfolio, upstream_fx_payload)
             portfolio_row = dict(portfolio)
             portfolio_row["fx_to_hkd"] = fx_payload.get("fx_to_hkd") or portfolio.get("fx_to_hkd", {})
             portfolio_row["fx_source"] = fx_payload.get("source")
@@ -824,7 +851,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             "active_id": store.get("active_id"),
             "portfolios": portfolios,
             "quote_error": quote_error,
-            "fx": fx_payload,
+            "fx": upstream_fx_payload,
             "futu_sync_results": futu_sync_results,
         }
 

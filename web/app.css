@@ -452,6 +452,36 @@ textarea {
   color: var(--amber);
 }
 
+.portfolio-fx-strip.manual span {
+  color: var(--blue);
+}
+
+.portfolio-fx-editor {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 8px;
+}
+
+.portfolio-fx-editor label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.portfolio-fx-editor input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 9px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
 .extended-session-pill {
   display: flex;
   flex-wrap: wrap;
@@ -523,8 +553,13 @@ textarea {
 
 .portfolio-cash-editor input,
 .portfolio-settings select,
-.portfolio-settings input {
+.portfolio-settings input,
+.portfolio-settings textarea {
   margin-top: 5px;
+}
+
+.portfolio-settings .wide-field {
+  grid-column: span 2;
 }
 
 .portfolio-sync-toggle {
@@ -2105,6 +2140,7 @@ pre {
   }
 
   .portfolio-cash-editor,
+  .portfolio-fx-editor,
   .portfolio-settings,
   .portfolio-clone-actions {
     grid-template-columns: 1fr;

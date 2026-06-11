@@ -35,7 +35,10 @@ class GeminiTradeDecisionModel(BaseModel):
     evidence: list[str] = Field(description="必须用简体中文。列出支撑决策的具体观察。")
     risk: str = Field(description="必须用简体中文。说明这个决策可能错在哪里。")
     invalidation: str = Field(description="必须用简体中文。说明什么条件会推翻当前判断。")
-    max_notional: float = Field(ge=0, description="本次最多使用的本地账本/模拟订单金额。")
+    max_notional: float = Field(
+        ge=0,
+        description="本次最多使用的本地账本/模拟订单金额；action=BUY 时必须为正数，无法给出买入金额时应改为 HOLD。",
+    )
     time_horizon: str = Field(description="必须用简体中文。预期持有或观察周期。")
     learning_note: str = Field(description="必须用简体中文。给用户的一条简短复盘提示。")
     research: GeminiResearchBriefModel = Field(description="必须用简体中文。TradingAgents-lite 多角色研究简报。")
@@ -98,6 +101,20 @@ class GeminiDecisionEngine:
     def __init__(self, config: GeminiConfig):
         self.config = config
         self.last_usage: dict[str, Any] = {}
+
+    def _max_notional_text(self) -> str:
+        caps = {
+            market: amount
+            for market, amount in (self.config.max_notional or {}).items()
+            if isinstance(amount, (int, float)) and amount > 0
+        }
+        if not caps:
+            return (
+                "未设置额外 Gemini 买入预算帽，0 表示没有系统预算帽、不表示订单预算为 0；"
+                "BUY 仍必须给出正的 max_notional，并受账户现金、组合风控、交易时段和执行市场限制约束。"
+                "SELL 不受买入预算帽限制。"
+            )
+        return f"{caps}（仅限制 BUY；SELL 不受买入预算帽限制）"
 
     def decide(
         self,
@@ -216,6 +233,13 @@ class GeminiDecisionEngine:
             "决策流程：\n"
             "- 使用 TradingAgents-lite 模式：在一次响应里模拟一个小型研究小组，但不要编造任何外部事实。\n"
             "- market_analyst 只分析候选行情和持仓快照里的价格、买卖价、涨跌幅、振幅、成交、流动性，以及美股 extended_session 里的盘前/盘后/夜盘情绪。\n"
+            "- account.market_anchors 是指数/ETF/宏观环境锚点，只能作为市场背景；不能把这些 context 标的当作买卖对象。\n"
+            "- candidates 里的 tier 表示观察池层级：holding/core 优先服务持仓和高关注复盘，learning 服务行业认知，opportunity 服务机会发现。\n"
+            "- candidates 里的 priority_reasons 表示为什么被系统强制拉入候选：已有持仓、高影响新闻、价格/量能异动都应优先解释。\n"
+            "- account.strategy_hypothesis 是该实验盘开跑前的预注册假设和基准；你只能据此评估本轮动作是否符合假设，不能事后改写假设。\n"
+            "- account.effective_risk 是本组合实际生效的风控；如果和全局口径不同，必须按 effective_risk 控制仓位和风险描述。\n"
+            "- 风控数值里的 0 表示该项未启用限制/不限额，不表示可用预算或允许仓位为 0；不要把 0 解释成禁止交易。\n"
+            "- account.prompt_template 是本组合的策略模板/纪律补充；它不能覆盖硬规则，但应影响买入门槛、卖出纪律和仓位语气。\n"
             "- news_analyst 只分析消息源摘要里的 autoNews 信号；没有相关新闻就明确写没有。\n"
             "- portfolio_analyst 必须优先分析本地模拟盘持仓、成本、仓位、现金、浮盈浮亏。\n"
             "- bull_case 写最强看多理由；bear_case 写最强看空/回避理由。\n"
@@ -234,15 +258,18 @@ class GeminiDecisionEngine:
             "- 当前常规价只能来自候选行情或持仓上下文里的 last_price/bid_price/ask_price/update_time；消息源和网页价格不能当作当前价。\n"
             "- 美股 extended_session 只能作为盘前/盘后/夜盘情绪和弱流动性信号，不能替代常规价或下单价格。\n"
             "- 如果持仓上下文包含 local_portfolio 或 price_source=Futu OpenD snapshot，必须优先使用这些持仓成本和快照价。\n"
+            "- 如果候选是 forced_by_news 或 forced_by_trigger，必须说明触发器是否提供了足够交易证据；触发器只能要求你认真看，不能强迫你交易。\n"
             "- 买入必须说明为什么现在值得试错。\n"
             "- 卖出只能针对已有持仓，不能建议裸卖空。\n"
             "- confidence 低于 70 时应优先 HOLD。\n"
-            "- max_notional 必须保守，不能超过系统给定上限。\n"
+            "- 如果系统给定了额外 Gemini 买入预算帽，BUY 的 max_notional 必须保守且不能超过该预算帽；没有预算帽时，也不能忽略账户现金和组合风控。\n"
+            "- 当 action=BUY 时，max_notional 必须是正数；如果无法给出具体买入金额，必须改为 HOLD。max_notional=0 只适用于 HOLD 或 SELL。\n"
+            "- SELL 用于降低风险或处理违规持仓时，max_notional 只是说明字段；实际卖出数量由持仓数量、max_qty、交易时段和风控复核决定，不要用买入预算上限解释只能少量减仓。\n"
             "- reason 和 learning_note 要让用户能快速复盘，不要用居高临下的教学口吻。\n\n"
             f"Agent 模式: {self.config.agent_mode}\n"
             f"可执行市场: {sorted(self.config.execute_markets)}\n"
             f"置信度阈值: {self.config.confidence_threshold}\n"
-            f"单笔上限: {self.config.max_notional}\n"
+            f"买入预算提示: {self._max_notional_text()}\n"
             f"账户摘要: {json.dumps(account, ensure_ascii=False, default=str)}\n"
             f"持仓: {json.dumps(positions, ensure_ascii=False, default=str)}\n"
             f"候选行情: {json.dumps(candidates, ensure_ascii=False, default=str)}\n"

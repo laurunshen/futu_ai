@@ -5,7 +5,7 @@ import math
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,14 +14,20 @@ from .evaluation import build_decision_review_baseline
 from .futu_client import FutuPaperClient
 from .futu_sync import apply_order_with_optional_futu_sync
 from .gemini_engine import GeminiDecisionEngine, GeminiTradeDecision
-from .market_data import extended_session_from_quote
+from .market_data import auto_loop_session, extended_session_from_quote, market_session_payload
 from .models import OrderIntent, infer_market
 from .news_signals import load_news_signals
-from .portfolios import load_portfolios
+from .portfolios import effective_fx_payload, load_portfolios
+from .risk import RiskEngine, risk_config_to_payload, risk_config_with_overrides
+from .storage import file_lock
 from .watchlist import WatchItem, load_watchlist
 
 
 LOG_DIR = PROJECT_ROOT / "data" / "decisions"
+ABNORMAL_CHANGE_PCT = 4.0
+ABNORMAL_VOLUME_RATIO = 2.0
+ABNORMAL_AMPLITUDE_PCT = 6.0
+ABNORMAL_EXTENDED_CHANGE_PCT = 3.0
 
 
 def _portfolio_kind_label(kind: Any) -> str:
@@ -72,11 +78,21 @@ class AutoTrader:
 
     def run_once(self, execute: bool | None = None, notes: list[str] | None = None) -> AutoTradeResult:
         execute = self.config.gemini.auto_execute if execute is None else execute
-        watchlist = load_watchlist(markets=self.config.gemini.observe_markets)
+        market_schedule = auto_loop_session(self.config.gemini.observe_markets)
+        scan_markets = set(market_schedule["scan_markets"] or self.config.gemini.observe_markets)
+        watchlist = load_watchlist(markets=scan_markets)
         snapshots = self._snapshot_watchlist(watchlist)
         watch_codes = [item.code for item in watchlist]
-        candidates = self._select_candidates(snapshots, limit=self.config.gemini.candidate_count)
+        trigger_scores, trigger_reasons = self._abnormal_candidate_boosts(snapshots)
+        candidates = self._select_candidates(
+            snapshots,
+            limit=self.config.gemini.candidate_count,
+            priority_scores=trigger_scores,
+            priority_reasons=trigger_reasons,
+        )
         account = self._account_summary("US")
+        account["market_schedule"] = market_schedule
+        account["market_anchors"] = self._market_anchor_rows(snapshots)
         positions = self._positions_all()
         news_payload = load_news_signals(
             self.config.news,
@@ -85,10 +101,16 @@ class AutoTrader:
         )
         news_boosts = self._news_candidate_boosts(news_payload, watch_codes)
         if news_boosts:
+            combined_scores, combined_reasons = self._merge_priority_inputs(
+                (trigger_scores, trigger_reasons),
+                (news_boosts, {code: ["高影响新闻命中"] for code in news_boosts}),
+            )
             candidates = self._select_candidates(
                 snapshots,
                 limit=self.config.gemini.candidate_count,
-                priority_scores=news_boosts,
+                priority_scores=combined_scores,
+                priority_reasons=combined_reasons,
+                news_scores=news_boosts,
             )
             news_payload = load_news_signals(
                 self.config.news,
@@ -129,34 +151,75 @@ class AutoTrader:
 
     def run_portfolios_once(self, execute: bool | None = None, notes: list[str] | None = None) -> dict[str, Any]:
         store = load_portfolios()
+        market_schedule = auto_loop_session(self.config.gemini.observe_markets)
+        scan_markets = set(market_schedule["scan_markets"] or self.config.gemini.observe_markets)
         results = []
+        skipped = []
         for portfolio in store.get("portfolios", []):
-            results.append(self._run_for_portfolio(portfolio, notes=notes or []))
+            if not bool(portfolio.get("ai_loop_enabled", True)):
+                skipped.append(
+                    {
+                        "id": portfolio.get("id"),
+                        "name": portfolio.get("name"),
+                        "reason": "ai_loop_enabled=false",
+                    }
+                )
+                continue
+            results.append(
+                self._run_for_portfolio(
+                    portfolio,
+                    notes=notes or [],
+                    market_schedule=market_schedule,
+                    scan_markets=scan_markets,
+                )
+            )
         return {
             "ok": all(result.ok for result in results) if results else True,
             "mode": "portfolio_multi_decision",
             "count": len(results),
+            "skipped_count": len(skipped),
+            "skipped_portfolios": skipped,
             "execute_requested": bool(execute),
+            "market_schedule": market_schedule,
             "results": [_clean(asdict(result)) for result in results],
         }
 
-    def _run_for_portfolio(self, portfolio: dict[str, Any], notes: list[str]) -> AutoTradeResult:
+    def _run_for_portfolio(
+        self,
+        portfolio: dict[str, Any],
+        notes: list[str],
+        *,
+        market_schedule: dict[str, Any] | None = None,
+        scan_markets: set[str] | None = None,
+    ) -> AutoTradeResult:
+        market_schedule = market_schedule or auto_loop_session(self.config.gemini.observe_markets)
+        scan_markets = set(scan_markets or market_schedule.get("scan_markets") or self.config.gemini.observe_markets)
         positions_raw = [dict(position) for position in portfolio.get("positions", []) if isinstance(position, dict)]
         portfolio_codes = [str(position.get("code", "")).upper() for position in positions_raw if position.get("code")]
-        watchlist = self._watchlist_with_portfolio_codes(portfolio_codes, positions_raw)
+        watchlist = self._watchlist_with_portfolio_codes(portfolio_codes, positions_raw, markets=scan_markets)
         snapshots = self._snapshot_watchlist(watchlist)
         watch_codes = [item.code for item in watchlist]
-        priority_scores = {code: 1500.0 for code in portfolio_codes}
+        trigger_scores, trigger_reasons = self._abnormal_candidate_boosts(snapshots)
+        holding_scores = {code: 1500.0 for code in portfolio_codes}
+        holding_reasons = {code: ["已有持仓，必须进入复盘候选"] for code in portfolio_codes}
+        priority_scores, priority_reasons = self._merge_priority_inputs(
+            (trigger_scores, trigger_reasons),
+            (holding_scores, holding_reasons),
+        )
         candidates = self._select_candidates(
             snapshots,
             limit=max(self.config.gemini.candidate_count, min(len(portfolio_codes) + 3, 12)),
             priority_scores=priority_scores,
+            priority_reasons=priority_reasons,
         )
         snapshot_by_code = {str(row.get("code", "")).upper(): row for row in snapshots}
         positions = self._enrich_portfolio_positions(positions_raw, snapshot_by_code)
-        fx_payload = self.client.fx_rates_to_hkd()
+        upstream_fx_payload = self.client.fx_rates_to_hkd()
+        fx_payload = effective_fx_payload(portfolio, upstream_fx_payload)
         portfolio_kind = str(portfolio.get("portfolio_kind") or "paper").lower()
         portfolio_kind_label = _portfolio_kind_label(portfolio_kind)
+        effective_risk = risk_config_with_overrides(self.config.risk, portfolio.get("risk_overrides"))
+        cadence_max_trades, cadence_cooldown = self._trade_quota_config(portfolio)
         account = {
             "type": "local_portfolio",
             "id": portfolio.get("id"),
@@ -174,9 +237,19 @@ class AutoTrader:
             "apply_mode": portfolio.get("apply_mode", "manual"),
             "strategy_profile": portfolio.get("strategy_profile", "general"),
             "strategy_tags": list(portfolio.get("strategy_tags", [])),
+            "strategy_hypothesis": dict(portfolio.get("strategy_hypothesis") or {}),
+            "prompt_template": str(portfolio.get("prompt_template") or ""),
+            "risk_overrides": dict(portfolio.get("risk_overrides") or {}),
+            "effective_risk": risk_config_to_payload(effective_risk),
+            "trade_cadence": {
+                "max_trades_per_day": cadence_max_trades,
+                "cooldown_minutes": cadence_cooldown,
+            },
             "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
             "position_count": len(positions),
             "recent_operations": list(portfolio.get("operations", []))[-20:],
+            "market_anchors": self._market_anchor_rows(snapshots),
+            "market_schedule": market_schedule,
             "price_rule": "当前价只能来自持仓和候选行情里的富途 OpenD 快照。",
         }
         news_payload = load_news_signals(
@@ -186,12 +259,18 @@ class AutoTrader:
         )
         news_boosts = self._news_candidate_boosts(news_payload, watch_codes)
         if news_boosts:
-            for code in portfolio_codes:
-                news_boosts[code] = max(news_boosts.get(code, 0), 1500.0)
+            news_reasons = {code: ["高影响新闻命中"] for code in news_boosts}
+            priority_scores, priority_reasons = self._merge_priority_inputs(
+                (trigger_scores, trigger_reasons),
+                (holding_scores, holding_reasons),
+                (news_boosts, news_reasons),
+            )
             candidates = self._select_candidates(
                 snapshots,
                 limit=max(self.config.gemini.candidate_count, min(len(portfolio_codes) + 3, 12)),
-                priority_scores=news_boosts,
+                priority_scores=priority_scores,
+                priority_reasons=priority_reasons,
+                news_scores=news_boosts,
             )
             news_payload = load_news_signals(
                 self.config.news,
@@ -218,14 +297,41 @@ class AutoTrader:
             f"策略档案={portfolio.get('strategy_profile', 'general')}；"
             f"策略标签={', '.join(portfolio.get('strategy_tags') or []) or '未设置'}。"
         )
+        hypothesis = portfolio.get("strategy_hypothesis") if isinstance(portfolio.get("strategy_hypothesis"), dict) else {}
+        if hypothesis:
+            news_notes.append(
+                "预注册策略假设："
+                f"版本={hypothesis.get('version') or '未设置'}；"
+                f"基准={hypothesis.get('benchmark') or '未设置'}；"
+                f"假设={hypothesis.get('hypothesis') or '未设置'}；"
+                f"成功口径={hypothesis.get('success_metric') or '未设置'}。"
+            )
+        if portfolio.get("risk_overrides"):
+            news_notes.append(
+                "本组合使用独立风控覆盖："
+                f"{json.dumps(risk_config_to_payload(effective_risk), ensure_ascii=False)}。"
+                "注意：风控数值 0 表示该项未启用限制/不限额，不表示可用预算或允许仓位为 0。"
+            )
+        news_notes.append(
+            "本组合交易节奏覆盖："
+            f"每日最多交易数={cadence_max_trades if cadence_max_trades > 0 else '不限'}；"
+            f"冷却分钟={cadence_cooldown if cadence_cooldown > 0 else '不限'}。"
+        )
+        if portfolio.get("prompt_template"):
+            news_notes.append(f"本组合策略提示模板：{str(portfolio.get('prompt_template'))[:1500]}")
         news_notes.append(language_note)
         news_notes.append(
             f"FX口径：{fx_payload.get('source')}；"
-            f"{'已使用富途OpenD FX快照' if fx_payload.get('ok') else '富途FX不可用，使用本地默认汇率'}。"
+            f"{'使用券商校准/实时FX' if fx_payload.get('ok') else '富途FX不可用，使用本地默认汇率'}。"
+        )
+        news_notes.append(
+            "交易时段规则：常规交易时段可应用订单；开盘前准备窗口只扫描和生成开盘计划；"
+            "闭市、午休和周末不允许本地模拟成交。当前状态="
+            f"{json.dumps(market_schedule, ensure_ascii=False)}。"
         )
 
         decision = self.engine.decide(candidates=candidates, positions=positions, account=account, notes=news_notes)
-        order, blocked = self._build_order(decision, positions)
+        order, blocked = self._build_order(decision, positions, portfolio=portfolio, fx_payload=fx_payload)
         execution = None
         if order:
             execution = {
@@ -274,6 +380,14 @@ class AutoTrader:
                 "apply_mode": apply_mode,
                 "strategy_profile": portfolio.get("strategy_profile", "general"),
                 "strategy_tags": list(portfolio.get("strategy_tags", [])),
+                "strategy_hypothesis": dict(portfolio.get("strategy_hypothesis") or {}),
+                "prompt_template": str(portfolio.get("prompt_template") or ""),
+                "risk_overrides": dict(portfolio.get("risk_overrides") or {}),
+                "effective_risk": risk_config_to_payload(effective_risk),
+                "trade_cadence": {
+                    "max_trades_per_day": cadence_max_trades,
+                    "cooldown_minutes": cadence_cooldown,
+                },
                 "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
                 "position_count": len(positions),
             },
@@ -361,7 +475,24 @@ class AutoTrader:
                 self.client = FutuPaperClient(self.config)
                 self.engine = GeminiDecisionEngine(self.config.gemini)
                 interval = max(30, self.config.gemini.loop_interval_seconds)
+                schedule = auto_loop_session(self.config.gemini.observe_markets)
+                if not schedule["should_scan"]:
+                    print(
+                        json.dumps(
+                            {
+                                "ok": True,
+                                "mode": "market_schedule_skip",
+                                "interval_seconds": interval,
+                                "market_schedule": schedule,
+                            },
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                    )
+                    time.sleep(interval)
+                    continue
                 result = self.run_portfolios_once(execute=execute)
+                result["market_schedule"] = schedule
                 print(json.dumps(_clean(result), ensure_ascii=False, default=str))
             except Exception as exc:
                 print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
@@ -385,9 +516,14 @@ class AutoTrader:
         return rows
 
     def _watchlist_with_portfolio_codes(
-        self, portfolio_codes: list[str], positions: list[dict[str, Any]]
+        self,
+        portfolio_codes: list[str],
+        positions: list[dict[str, Any]],
+        *,
+        markets: set[str] | None = None,
     ) -> list[WatchItem]:
-        items = load_watchlist(markets=self.config.gemini.observe_markets)
+        market_filter = set(markets or self.config.gemini.observe_markets)
+        items = load_watchlist(markets=market_filter)
         by_code = {item.code: item for item in items}
         position_by_code = {str(position.get("code", "")).upper(): position for position in positions}
         for code in portfolio_codes:
@@ -397,7 +533,7 @@ class AutoTrader:
                 market = infer_market(code)
             except ValueError:
                 continue
-            if market not in self.config.gemini.observe_markets:
+            if market not in market_filter:
                 continue
             position = position_by_code.get(code, {})
             by_code[code] = WatchItem(
@@ -405,6 +541,8 @@ class AutoTrader:
                 name=str(position.get("name") or code),
                 sector=str(position.get("note") or "持仓"),
                 market=market,
+                tier="holding",
+                role="trade",
             )
         return sorted(by_code.values(), key=lambda item: item.code)
 
@@ -443,20 +581,50 @@ class AutoTrader:
             row = dict(row)
             row["watch_name"] = item.name
             row["watch_sector"] = item.sector
+            row["watch_tier"] = item.tier
+            row["watch_role"] = item.role
             row["market"] = item.market
             row["extended_session"] = row.get("extended_session") or extended_session_from_quote(row, item.market)
             enriched.append(_clean(row))
         return enriched
+
+    def _market_anchor_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        anchors: list[dict[str, Any]] = []
+        for row in rows:
+            if str(row.get("watch_role") or "").lower() != "context":
+                continue
+            last_price = self._num(row.get("last_price"))
+            prev_close = self._num(row.get("prev_close_price"))
+            change_pct = (last_price - prev_close) / prev_close * 100 if last_price > 0 and prev_close > 0 else None
+            anchors.append(
+                {
+                    "code": str(row.get("code") or "").upper(),
+                    "name": row.get("name") or row.get("watch_name"),
+                    "sector": row.get("watch_sector"),
+                    "tier": row.get("watch_tier"),
+                    "last_price": last_price or None,
+                    "change_pct": round(change_pct, 3) if change_pct is not None else None,
+                    "extended_session": row.get("extended_session"),
+                }
+            )
+        return anchors[:10]
 
     def _select_candidates(
         self,
         rows: list[dict[str, Any]],
         limit: int,
         priority_scores: dict[str, float] | None = None,
+        priority_reasons: dict[str, list[str]] | None = None,
+        news_scores: dict[str, float] | None = None,
     ) -> list[dict[str, Any]]:
         scored = []
         priority_scores = priority_scores or {}
+        priority_reasons = priority_reasons or {}
+        news_scores = news_scores or {}
         for row in rows:
+            role = str(row.get("watch_role") or "trade").lower()
+            if role == "context":
+                continue
             code = str(row.get("code", "")).upper()
             last_price = self._num(row.get("last_price"))
             prev_close = self._num(row.get("prev_close_price"))
@@ -477,14 +645,20 @@ class AutoTrader:
                 score += min(abs(extended_change), 8) * 1.2
             if extended_volume > 0:
                 score += min(math.log10(extended_volume), 8) * 0.18
-            news_boost = priority_scores.get(code, 0)
-            if news_boost:
-                score += 500 + news_boost * 5
+            priority_boost = priority_scores.get(code, 0)
+            if priority_boost:
+                score += 10000 + priority_boost * 10
+            news_boost = news_scores.get(code, 0)
+            tier = str(row.get("watch_tier") or "opportunity").lower()
+            tier_boost = {"holding": 2200, "core": 450, "learning": 160, "opportunity": 0}.get(tier, 0)
+            score += tier_boost
             scored.append(
                 {
                     "code": code or row.get("code"),
                     "name": row.get("name") or row.get("watch_name"),
                     "sector": row.get("watch_sector"),
+                    "tier": tier,
+                    "role": role,
                     "market": row.get("market"),
                     "last_price": last_price,
                     "bid_price": self._num(row.get("bid_price")),
@@ -500,11 +674,75 @@ class AutoTrader:
                     "extended_price": self._num((extended or {}).get("price")) or None,
                     "lot_size": self._num(row.get("lot_size")) or 1,
                     "score": round(score, 3),
+                    "priority_score": round(priority_boost, 3),
+                    "priority_reasons": list(priority_reasons.get(code, [])),
                     "news_boost": round(news_boost, 3),
+                    "forced_by_news": bool(news_boost),
+                    "forced_by_trigger": bool(priority_reasons.get(code)),
                 }
             )
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:limit]
+
+    def _abnormal_candidate_boosts(self, rows: list[dict[str, Any]]) -> tuple[dict[str, float], dict[str, list[str]]]:
+        boosts: dict[str, float] = {}
+        reasons: dict[str, list[str]] = {}
+        for row in rows:
+            role = str(row.get("watch_role") or "trade").lower()
+            if role == "context":
+                continue
+            code = str(row.get("code", "")).upper()
+            if not code:
+                continue
+            last_price = self._num(row.get("last_price"))
+            prev_close = self._num(row.get("prev_close_price"))
+            volume_ratio = self._num(row.get("volume_ratio"))
+            amplitude = self._num(row.get("amplitude"))
+            extended = row.get("extended_session") or extended_session_from_quote(row, row.get("market", ""))
+            extended_change = self._num((extended or {}).get("change_rate"))
+            row_reasons: list[str] = []
+            score = 0.0
+            if last_price > 0 and prev_close > 0:
+                change_pct = (last_price - prev_close) / prev_close * 100
+                if abs(change_pct) >= ABNORMAL_CHANGE_PCT:
+                    row_reasons.append(f"日内涨跌幅 {change_pct:.2f}% 超过 {ABNORMAL_CHANGE_PCT:g}%")
+                    score += 700 + min(abs(change_pct), 12) * 20
+            if volume_ratio >= ABNORMAL_VOLUME_RATIO:
+                row_reasons.append(f"量比 {volume_ratio:.2f} 超过 {ABNORMAL_VOLUME_RATIO:g}")
+                score += 550 + min(volume_ratio, 8) * 45
+            if amplitude >= ABNORMAL_AMPLITUDE_PCT:
+                row_reasons.append(f"振幅 {amplitude:.2f}% 超过 {ABNORMAL_AMPLITUDE_PCT:g}%")
+                score += 450 + min(amplitude, 14) * 18
+            if abs(extended_change) >= ABNORMAL_EXTENDED_CHANGE_PCT:
+                row_reasons.append(f"盘前/盘后变化 {extended_change:.2f}% 超过 {ABNORMAL_EXTENDED_CHANGE_PCT:g}%")
+                score += 520 + min(abs(extended_change), 10) * 25
+            if row_reasons:
+                boosts[code] = max(boosts.get(code, 0.0), score)
+                reasons.setdefault(code, []).extend(row_reasons)
+        return boosts, reasons
+
+    def _merge_priority_inputs(
+        self,
+        *items: tuple[dict[str, float], dict[str, list[str]]],
+    ) -> tuple[dict[str, float], dict[str, list[str]]]:
+        scores: dict[str, float] = {}
+        reasons: dict[str, list[str]] = {}
+        for score_payload, reason_payload in items:
+            for code, score in (score_payload or {}).items():
+                key = str(code or "").upper()
+                if not key:
+                    continue
+                scores[key] = max(scores.get(key, 0.0), self._num(score))
+            for code, row_reasons in (reason_payload or {}).items():
+                key = str(code or "").upper()
+                if not key:
+                    continue
+                bucket = reasons.setdefault(key, [])
+                for reason in row_reasons or []:
+                    text = str(reason or "").strip()
+                    if text and text not in bucket:
+                        bucket.append(text)
+        return scores, reasons
 
     def _news_candidate_boosts(self, news_payload: dict[str, Any], watch_codes: list[str]) -> dict[str, float]:
         watch_code_set = {code.upper() for code in watch_codes}
@@ -537,7 +775,12 @@ class AutoTrader:
         return _clean(rows)
 
     def _build_order(
-        self, decision: GeminiTradeDecision, positions: list[dict[str, Any]]
+        self,
+        decision: GeminiTradeDecision,
+        positions: list[dict[str, Any]],
+        *,
+        portfolio: dict[str, Any] | None = None,
+        fx_payload: dict[str, Any] | None = None,
     ) -> tuple[OrderIntent | None, list[str]]:
         blocked: list[str] = []
         if decision.action == "HOLD":
@@ -548,13 +791,19 @@ class AutoTrader:
         except ValueError as exc:
             return None, [str(exc)]
 
+        session = market_session_payload(market)
+        if not session["can_trade"]:
+            blocked.append(
+                f"{market} market is {session['status']}; AI local order applications are blocked outside regular "
+                f"trading sessions ({session['local_time']} {session['timezone']}: {session['reason']})"
+            )
         if market not in self.config.gemini.execute_markets:
             blocked.append(f"{market} is observe-only. GEMINI_EXECUTE_MARKETS={sorted(self.config.gemini.execute_markets)}")
         if decision.confidence < self.config.gemini.confidence_threshold:
             blocked.append(
                 f"confidence {decision.confidence} is below threshold {self.config.gemini.confidence_threshold}"
             )
-        if not self._trade_quota_available():
+        if not self._trade_quota_available(portfolio=portfolio):
             blocked.append("daily trade quota or cooldown blocked this order")
 
         quote = self.client.snapshot([code])
@@ -569,26 +818,53 @@ class AutoTrader:
             blocked.append("selected code has no usable price")
             return None, blocked
 
-        max_notional = min(
-            decision.max_notional or self.config.gemini.max_notional.get(market, 0),
-            self.config.gemini.max_notional.get(market, 0),
-            self.config.risk.max_order_value.get(market, 0),
-        )
-        qty = math.floor(max_notional / price)
-        lot_size = int(self._num(row.get("lot_size")) or 1)
-        if market == "HK" and lot_size > 1:
-            qty = (qty // lot_size) * lot_size
-        if qty <= 0:
-            blocked.append(f"max_notional {max_notional} is too small for price {price}")
-            return None, blocked
-
+        effective_risk = risk_config_with_overrides(self.config.risk, portfolio.get("risk_overrides")) if portfolio else self.config.risk
+        risk_order_cap = self._num(effective_risk.max_order_value.get(market))
         if decision.action == "SELL":
             held_qty = self._held_qty(code, positions)
             if held_qty <= 0:
                 blocked.append("SELL blocked because there is no long position")
-            qty = min(qty, int(held_qty))
-            if qty <= 0:
                 return None, blocked
+            max_qty = self._num(effective_risk.max_qty.get(market))
+            qty = int(held_qty)
+            if max_qty > 0:
+                qty = min(qty, int(max_qty))
+        else:
+            caps = [risk_order_cap]
+            decision_cap = self._num(decision.max_notional)
+            if decision_cap > 0:
+                caps.append(decision_cap)
+            if portfolio is not None:
+                positive_caps = [cap for cap in caps if cap > 0]
+                if not positive_caps:
+                    blocked.append(
+                        "BUY blocked because decision.max_notional is 0 and no positive budget cap is configured; "
+                        "with unlimited caps, BUY decisions must provide a positive order amount"
+                    )
+                    return None, blocked
+                max_notional = min(positive_caps)
+            else:
+                gemini_cap = self._num(self.config.gemini.max_notional.get(market))
+                if gemini_cap > 0:
+                    caps.append(gemini_cap)
+                positive_caps = [cap for cap in caps if cap > 0]
+                if not positive_caps:
+                    blocked.append(
+                        "BUY blocked because decision.max_notional is 0 and no positive budget cap is configured; "
+                        "with unlimited caps, BUY decisions must provide a positive order amount"
+                    )
+                    return None, blocked
+                max_notional = min(positive_caps)
+            qty = math.floor(max_notional / price)
+        lot_size = int(self._num(row.get("lot_size")) or 1)
+        if market == "HK" and lot_size > 1:
+            qty = (qty // lot_size) * lot_size
+        if qty <= 0:
+            if decision.action == "SELL":
+                blocked.append(f"SELL blocked because holding or max_qty is too small for lot size {lot_size}")
+            else:
+                blocked.append(f"max_notional {max_notional} is too small for price {price}")
+            return None, blocked
 
         intent = OrderIntent(
             code=code,
@@ -598,34 +874,88 @@ class AutoTrader:
             order_type="NORMAL",
             reason=f"Gemini: {decision.reason[:120]}",
         )
-        risk_decision = self.client.validate(intent)
+        if portfolio is not None:
+            risk_decision = RiskEngine(effective_risk).validate_portfolio(
+                intent,
+                portfolio,
+                positions=positions,
+                fx_to_hkd=(fx_payload or {}).get("fx_to_hkd") if isinstance(fx_payload, dict) else None,
+            )
+        else:
+            risk_decision = self.client.validate(intent)
         blocked.extend(risk_decision.violations)
         return intent, blocked
 
-    def _trade_quota_available(self) -> bool:
-        today = datetime.now().date().isoformat()
-        log_path = LOG_DIR / f"{today}.jsonl"
-        if not log_path.exists():
+    def _trade_quota_config(self, portfolio: dict[str, Any] | None = None) -> tuple[int, int]:
+        max_trades = int(self.config.gemini.max_trades_per_day)
+        cooldown = int(self.config.gemini.cooldown_minutes)
+        overrides = portfolio.get("risk_overrides") if isinstance(portfolio, dict) else {}
+        if isinstance(overrides, dict):
+            if "max_trades_per_day" in overrides:
+                max_trades = max(0, int(self._num(overrides.get("max_trades_per_day"))))
+            if "cooldown_minutes" in overrides:
+                cooldown = max(0, int(self._num(overrides.get("cooldown_minutes"))))
+        return max_trades, cooldown
+
+    def _trade_quota_available(self, *, portfolio: dict[str, Any] | None = None) -> bool:
+        max_trades_per_day, cooldown_minutes = self._trade_quota_config(portfolio)
+        if max_trades_per_day <= 0 and cooldown_minutes <= 0:
             return True
+        portfolio_id = str((portfolio or {}).get("id") or "")
+        now_utc = datetime.now(timezone.utc)
+        today = datetime.now().date()
+        lookback_days = max(0, math.ceil(max(cooldown_minutes, 0) / 1440))
+        log_paths = [LOG_DIR / f"{(today - timedelta(days=offset)).isoformat()}.jsonl" for offset in range(lookback_days + 1)]
         executed = 0
         last_ts: datetime | None = None
-        for line in log_path.read_text(encoding="utf-8").splitlines():
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if item.get("execution", {}).get("mode") == "paper_execute" and item.get("execution", {}).get("ok"):
-                executed += 1
+        for log_path in log_paths:
+            with file_lock(log_path, exclusive=False):
+                if not log_path.exists():
+                    continue
+                lines = log_path.read_text(encoding="utf-8").splitlines()
+            for line in lines:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not self._log_item_counts_for_quota(item, portfolio_id=portfolio_id):
+                    continue
                 ts_raw = item.get("timestamp")
+                parsed_ts = None
                 if ts_raw:
-                    last_ts = datetime.fromisoformat(ts_raw)
-        if executed >= self.config.gemini.max_trades_per_day:
+                    try:
+                        parsed_ts = datetime.fromisoformat(str(ts_raw))
+                    except ValueError:
+                        parsed_ts = None
+                    if parsed_ts and parsed_ts.tzinfo is None:
+                        parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+                    if parsed_ts and (last_ts is None or parsed_ts > last_ts):
+                        last_ts = parsed_ts
+                if log_path.name == f"{today.isoformat()}.jsonl":
+                    executed += 1
+        if max_trades_per_day > 0 and executed >= max_trades_per_day:
             return False
-        if last_ts:
-            elapsed = datetime.now(timezone.utc) - last_ts
-            if elapsed.total_seconds() < self.config.gemini.cooldown_minutes * 60:
+        if cooldown_minutes > 0 and last_ts:
+            elapsed = now_utc - last_ts
+            if elapsed.total_seconds() < cooldown_minutes * 60:
                 return False
         return True
+
+    def _log_item_counts_for_quota(self, item: dict[str, Any], *, portfolio_id: str = "") -> bool:
+        if portfolio_id:
+            portfolio = item.get("portfolio") if isinstance(item.get("portfolio"), dict) else {}
+            if str(portfolio.get("id") or "") != portfolio_id:
+                return False
+        execution = item.get("execution") if isinstance(item.get("execution"), dict) else {}
+        if execution.get("mode") == "paper_execute" and execution.get("ok"):
+            return True
+        application = item.get("application") if isinstance(item.get("application"), dict) else {}
+        if str(application.get("mode") or "").lower() != "auto":
+            return False
+        status = str(application.get("status") or "").lower()
+        if status not in {"applied", "partially_applied", "futu_submitted"}:
+            return False
+        return bool(item.get("order"))
 
     def _append_log(self, result: AutoTradeResult) -> Path:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -633,8 +963,9 @@ class AutoTrader:
         payload = _clean(asdict(result))
         payload["timestamp"] = datetime.now(timezone.utc).isoformat()
         payload.pop("log_path", None)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        with file_lock(path):
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
         return path
 
     def _held_qty(self, code: str, positions: list[dict[str, Any]]) -> float:
