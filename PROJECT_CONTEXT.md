@@ -7,6 +7,8 @@ GitHub：`laurunshen/futu_ai.git`
 服务器项目目录：`/home/ec2-user/futu_ai`
 
 > 这个文件用于切换对话时快速恢复上下文。不要在这里写 Gemini API Key、GitHub Token、Basic Auth 密码、Futu 密码或验证码。
+>
+> 交易策略、AB Test 设计和复盘原则单独记录在 `STRATEGY.md`。
 
 ## 项目目标
 
@@ -64,7 +66,7 @@ ssh -o ConnectTimeout=10 -i /Users/liurunsheng/Documents/futu-paper-ai/secrets/f
 - Futu OpenD 不能暴露公网，只允许 `127.0.0.1:11111`。
 - Web 入口必须有认证。
 - 不要提交 `.env`、`secrets/`、`*.pem`、`data/state/`。
-- Gemini 可以给交易建议，但当前多模拟盘自动周期只记录“组合建议”，不会自动修改本地持仓，也不会向富途提交订单。
+- Gemini 可以给交易建议；`auto` 模式会自动应用到本地模拟盘账本，但不会向富途提交订单。
 - 当前用户没有 A 股权限，因此 A 股暂时只保留代码能力，不作为主流程。
 
 ## 已实现功能
