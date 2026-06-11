@@ -84,12 +84,15 @@ Each portfolio has an AI application mode: `observe` only records decisions,
 `manual` waits for the user to apply an AI order from the decision detail page,
 and `auto` applies risk-approved AI orders to the local portfolio ledger. Local
 applications update `data/state/portfolios.json`, write a trade record, and do
-not submit Futu orders. Local buys use broker-like buying power: they spend the
-trade currency first and can auto-convert base-currency cash using the stored
-FX table when the trade currency balance is insufficient. The app now probes
-Futu OpenD FX snapshots first; if the current OpenD/account setup does not
-support FX quotes, it falls back to the local HKD table and records that source
-in portfolio payloads and trade logs. US stock snapshots also keep Futu's
+do not submit Futu orders unless that portfolio has Futu paper sync enabled.
+When sync is enabled, applying an AI order first submits a Futu SIMULATE order
+and then writes the actual Futu fill quantity and average fill price back to the
+local ledger. Local buys use broker-like buying power: they spend the trade
+currency first and can auto-convert base-currency cash using the stored FX table
+when the trade currency balance is insufficient. The app now probes Futu OpenD
+FX snapshots first; if the current OpenD/account setup does not support FX
+quotes, it falls back to the local HKD table and records that source in
+portfolio payloads and trade logs. US stock snapshots also keep Futu's
 pre-market, after-hours, and overnight fields as `extended_session` sentiment
 signals; regular `last_price` / bid / ask remain the trade and valuation price
 sources.

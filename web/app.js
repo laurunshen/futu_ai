@@ -381,12 +381,22 @@ function applyModeLabel(mode) {
   }[String(mode || "manual").toLowerCase()] || "手动应用";
 }
 
+function futuSyncLabel(portfolio) {
+  if (!portfolio?.futu_sync_enabled) return "";
+  const pending = Number(portfolio.futu_sync_pending_count || 0);
+  return pending > 0 ? `富途同步 · ${pending} 待回写` : "富途同步";
+}
+
 function applicationLabel(application) {
   const status = String(application?.status || "").toLowerCase();
   return {
     pending: "待手动应用",
     applied: "已应用",
     already_applied: "已应用",
+    futu_submitted: "富途已提交",
+    partially_applied: "部分成交",
+    futu_submit_failed: "富途提交失败",
+    local_apply_failed: "本地反写失败",
     skipped: "仅观察",
     blocked: "已阻止",
     failed: "应用失败",
@@ -448,11 +458,12 @@ function renderPortfolios(payload) {
       const totals = Object.entries(portfolio.totals_by_currency || {})
         .map(([currency, row]) => `${currency} ${fmt(row.market_value || row.cost_value || 0)}`)
         .join(" · ");
+      const syncLabel = futuSyncLabel(portfolio);
       return `
         <article class="portfolio-item ${active ? "active" : ""}">
           <button type="button" class="portfolio-main" data-portfolio-active="${html(portfolio.id)}">
             <span class="portfolio-name">${html(portfolio.name)}</span>
-            <span class="portfolio-meta">${html(applyModeLabel(portfolio.apply_mode))} · ${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
+            <span class="portfolio-meta">${html(applyModeLabel(portfolio.apply_mode))}${syncLabel ? ` · ${html(syncLabel)}` : ""} · ${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
           </button>
           <button type="button" class="portfolio-delete" data-portfolio-delete="${html(portfolio.id)}" title="删除模拟盘" aria-label="删除 ${html(portfolio.name)}">×</button>
         </article>
@@ -560,6 +571,11 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
           <option value="auto" ${portfolio.apply_mode === "auto" ? "selected" : ""}>自动应用</option>
         </select>
       </label>
+      <label class="portfolio-sync-toggle" title="应用模拟盘订单时先提交富途模拟单，并用实际成交反写本地">
+        <input id="activePortfolioFutuSync" type="checkbox" ${portfolio.futu_sync_enabled ? "checked" : ""}>
+        <span>同步富途模拟盘</span>
+        ${portfolio.futu_sync_pending_count ? `<em>${html(portfolio.futu_sync_pending_count)} 待回写</em>` : ""}
+      </label>
       <div class="portfolio-clone-actions">
         <button type="button" class="secondary compact" data-clone-mode="manual">克隆手动盘</button>
         <button type="button" class="secondary compact" data-clone-mode="auto">克隆自动盘</button>
@@ -573,6 +589,7 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     el("activePortfolioCash").value = cashByCurrency[currency] ?? 0;
   });
   el("activePortfolioMode")?.addEventListener("change", updateActivePortfolioMode);
+  el("activePortfolioFutuSync")?.addEventListener("change", updateActivePortfolioMode);
   target.querySelectorAll("[data-clone-mode]").forEach((button) => {
     button.addEventListener("click", () => cloneActivePortfolio(button.dataset.cloneMode));
   });
@@ -915,6 +932,10 @@ function renderFilteredNewsSignals() {
 }
 
 function executionLabel(row) {
+  const appStatus = String(row.application?.status || "").toLowerCase();
+  if (appStatus === "futu_submitted") return "富途待成交";
+  if (appStatus === "partially_applied") return "部分成交";
+  if (appStatus === "local_apply_failed") return "反写失败";
   if (row.execution?.ok && row.execution?.mode === "paper_execute") return "已执行";
   if (row.execution?.ok && row.execution?.mode === "paper_dry_run") return "Dry-run";
   if (row.execution?.ok && row.execution?.mode === "portfolio_suggestion") return "组合建议";
@@ -956,6 +977,20 @@ function detailKvGrid(items) {
         .join("")}
     </div>
   `;
+}
+
+function renderFutuSyncDetail(application) {
+  const sync = application?.futu_sync;
+  if (!sync) return "";
+  const dealtQty = Number(sync.dealt_qty || 0);
+  const avgPrice = Number(sync.dealt_avg_price || 0);
+  return detailKvGrid([
+    ["富途订单号", sync.order_id],
+    ["同步状态", applicationLabel({ status: sync.status || application?.status })],
+    ["富途成交", dealtQty > 0 && avgPrice > 0 ? `${fmt(dealtQty)} @ ${fmt(avgPrice)}` : ""],
+    ["已反写数量", sync.applied_qty ? fmt(sync.applied_qty) : ""],
+    ["同步消息", sync.message],
+  ]);
 }
 
 function detailSection(title, body) {
@@ -1214,12 +1249,13 @@ function renderDecisionDetail(row) {
   const newsSignals = Array.isArray(row.news_signals) ? row.news_signals : [];
   const outputTokens = (Number(usage.candidates_token_count) || 0) + (Number(usage.thoughts_token_count) || 0);
   const applicationStatus = String(application?.status || "").toLowerCase();
+  const terminalApplicationStatuses = ["applied", "already_applied", "futu_submitted", "partially_applied", "local_apply_failed"];
   const canApplyDecision = Boolean(
     row.decision_id &&
       order &&
       portfolio?.id &&
       !blocked.length &&
-      !["applied", "already_applied"].includes(applicationStatus)
+      !terminalApplicationStatuses.includes(applicationStatus)
   );
 
   status.className = `detail-status ${html(action)}`;
@@ -1286,6 +1322,7 @@ function renderDecisionDetail(row) {
         ["换汇", application?.trade?.fx?.source_amount ? `${application.trade.fx.source_amount} ${application.trade.fx.source_currency} -> ${application.trade.fx.target_amount} ${application.trade.fx.target_currency} · ${application.trade.fx.source || ""}` : ""],
       ])
     )}
+    ${application?.futu_sync ? detailSection("富途同步", renderFutuSyncDetail(application)) : ""}
     ${canApplyDecision ? `<button type="button" class="primary-wide decision-apply-button" id="applyDecisionToPortfolio">应用到模拟盘</button>` : ""}
     ${portfolio ? detailSection(
       "模拟盘",
@@ -1645,6 +1682,7 @@ async function updateActivePortfolioMode() {
       body: JSON.stringify({
         portfolio_id: state.activePortfolioId,
         apply_mode: el("activePortfolioMode").value,
+        futu_sync_enabled: Boolean(el("activePortfolioFutuSync")?.checked),
       }),
     });
     renderPortfolios(payload);

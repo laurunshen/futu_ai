@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -236,7 +237,39 @@ class FutuPaperClient:
             )
         return {"ok": ret == futu.RET_OK, "data": _records(data)}
 
-    def place_order(self, intent: OrderIntent, execute: bool) -> dict[str, Any]:
+    def order_status(self, market: str, order_id: str, code: str = "") -> dict[str, Any]:
+        futu = _load_futu(self.config.use_system_home)
+        market = market.upper()
+        with self.trade_context(market) as ctx:
+            ret, data = ctx.order_list_query(
+                order_id=str(order_id or ""),
+                code=str(code or ""),
+                trd_env=futu.TrdEnv.SIMULATE,
+                acc_id=self.config.account_id,
+                acc_index=self.config.account_index,
+                refresh_cache=True,
+                order_market=getattr(futu.TrdMarket, market),
+            )
+        return {"ok": ret == futu.RET_OK, "data": _records(data)}
+
+    def deals(self, market: str, code: str = "", order_id: str = "") -> dict[str, Any]:
+        futu = _load_futu(self.config.use_system_home)
+        market = market.upper()
+        with self.trade_context(market) as ctx:
+            ret, data = ctx.deal_list_query(
+                code=str(code or ""),
+                trd_env=futu.TrdEnv.SIMULATE,
+                acc_id=self.config.account_id,
+                acc_index=self.config.account_index,
+                refresh_cache=True,
+                deal_market=getattr(futu.TrdMarket, market),
+            )
+        rows = _records(data)
+        if ret == futu.RET_OK and order_id and isinstance(rows, list):
+            rows = [row for row in rows if str(row.get("order_id") or "") == str(order_id)]
+        return {"ok": ret == futu.RET_OK, "data": rows}
+
+    def place_order(self, intent: OrderIntent, execute: bool, *, remark: str = "AI_PAPER") -> dict[str, Any]:
         decision = self.validate(intent)
         if not decision.approved:
             return {
@@ -266,7 +299,7 @@ class FutuPaperClient:
                 trd_env=futu.TrdEnv.SIMULATE,
                 acc_id=self.config.account_id,
                 acc_index=self.config.account_index,
-                remark="AI_PAPER",
+                remark=str(remark or "AI_PAPER")[:64],
                 time_in_force=futu.TimeInForce.DAY,
                 fill_outside_rth=False,
                 session=futu.Session.NONE,
@@ -277,4 +310,30 @@ class FutuPaperClient:
             "mode": "paper_execute",
             "intent": intent.to_dict(),
             "data": _records(data),
+        }
+
+    def place_paper_order_with_status(self, intent: OrderIntent, *, remark: str = "AI_SYNC") -> dict[str, Any]:
+        placed = self.place_order(intent, execute=True, remark=remark)
+        if not placed.get("ok"):
+            return {**placed, "mode": "futu_sync"}
+
+        rows = placed.get("data") or []
+        first = rows[0] if isinstance(rows, list) and rows else {}
+        order_id = str(first.get("order_id") or "")
+        time.sleep(0.6)
+
+        order_payload = self.order_status(intent.market, order_id, intent.code) if order_id else {"ok": False, "data": []}
+        order_rows = order_payload.get("data") if order_payload.get("ok") else []
+        order = order_rows[0] if isinstance(order_rows, list) and order_rows else first
+        deals_payload = self.deals(intent.market, intent.code, order_id) if order_id else {"ok": False, "data": []}
+
+        return {
+            "ok": True,
+            "mode": "futu_sync",
+            "intent": intent.to_dict(),
+            "place": placed,
+            "order_id": order_id,
+            "order": order,
+            "deals": deals_payload.get("data") or [],
+            "order_query": order_payload,
         }

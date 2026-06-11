@@ -11,11 +11,12 @@ from typing import Any
 
 from .config import AppConfig, PROJECT_ROOT
 from .futu_client import FutuPaperClient
+from .futu_sync import apply_order_with_optional_futu_sync
 from .gemini_engine import GeminiDecisionEngine, GeminiTradeDecision
 from .market_data import extended_session_from_quote
 from .models import OrderIntent, infer_market
 from .news_signals import load_news_signals
-from .portfolios import apply_order_to_portfolio, load_portfolios
+from .portfolios import load_portfolios
 from .watchlist import WatchItem, load_watchlist
 
 
@@ -160,6 +161,7 @@ class AutoTrader:
             "fx_error": fx_payload.get("error"),
             "buying_power_rule": "Local ledger can auto-convert base currency cash for cross-currency simulated buys; FX uses Futu OpenD if available, otherwise local defaults are explicitly recorded.",
             "apply_mode": portfolio.get("apply_mode", "manual"),
+            "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
             "position_count": len(positions),
             "price_rule": "Current prices are only from Futu OpenD snapshots attached to positions/candidates.",
         }
@@ -187,7 +189,11 @@ class AutoTrader:
         if news_payload.get("ok"):
             news_notes.extend(str(note) for note in news_payload.get("notes") or [])
         apply_mode = str(portfolio.get("apply_mode") or "manual").lower()
-        news_notes.append(f"本轮是本地模拟盘决策；当前模拟盘应用模式={apply_mode}；不会提交富途订单。")
+        futu_sync_text = "开启" if portfolio.get("futu_sync_enabled") else "关闭"
+        news_notes.append(
+            f"本轮是本地模拟盘决策；当前模拟盘应用模式={apply_mode}；富途模拟盘同步={futu_sync_text}。"
+            "manual 需要用户确认，auto 会按设置应用；若同步开启，应用时先提交富途模拟单，再按实际成交反写本地。"
+        )
         news_notes.append(
             f"FX口径：{fx_payload.get('source')}；"
             f"{'已使用富途OpenD FX快照' if fx_payload.get('ok') else '富途FX不可用，使用本地默认汇率'}。"
@@ -239,6 +245,7 @@ class AutoTrader:
                 "fx_ok": bool(fx_payload.get("ok")),
                 "fx_error": fx_payload.get("error"),
                 "apply_mode": apply_mode,
+                "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
                 "position_count": len(positions),
             },
         )
@@ -285,9 +292,11 @@ class AutoTrader:
                 "message": "Manual portfolio; waiting for user approval.",
             }
         try:
-            applied = apply_order_to_portfolio(
-                str(portfolio.get("id") or ""),
-                order,
+            applied = apply_order_with_optional_futu_sync(
+                client=self.client,
+                portfolio=portfolio,
+                portfolio_id=str(portfolio.get("id") or ""),
+                order_payload=order,
                 source="auto",
                 decision_id=decision_id,
                 reason=reason,

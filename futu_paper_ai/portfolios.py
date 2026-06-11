@@ -107,6 +107,29 @@ def _normalize_trade(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_sync_order(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(payload.get("id") or payload.get("order_id") or _new_id()),
+        "decision_id": str(payload.get("decision_id") or ""),
+        "source": str(payload.get("source") or "futu_sync"),
+        "order_id": str(payload.get("order_id") or ""),
+        "code": str(payload.get("code") or "").upper(),
+        "side": str(payload.get("side") or "").upper(),
+        "qty": _num(payload.get("qty"), 0),
+        "price": _num(payload.get("price"), 0),
+        "dealt_qty": _num(payload.get("dealt_qty"), 0),
+        "dealt_avg_price": _num(payload.get("dealt_avg_price"), 0),
+        "applied_qty": _num(payload.get("applied_qty"), 0),
+        "status": str(payload.get("status") or "submitted"),
+        "message": str(payload.get("message") or ""),
+        "futu_order": dict(payload.get("futu_order") or {}),
+        "futu_deals": list(payload.get("futu_deals") or []),
+        "order_payload": dict(payload.get("order_payload") or {}),
+        "created_at": str(payload.get("created_at") or _now()),
+        "updated_at": str(payload.get("updated_at") or _now()),
+    }
+
+
 def _default_store() -> dict[str, Any]:
     now = _now()
     return {
@@ -123,6 +146,7 @@ def _default_store() -> dict[str, Any]:
                 "futu_sync_enabled": False,
                 "positions": [],
                 "trades": [],
+                "futu_sync_orders": [],
                 "created_at": now,
                 "updated_at": now,
             }
@@ -179,6 +203,11 @@ def _normalize_portfolio(payload: dict[str, Any]) -> dict[str, Any]:
         for item in payload.get("trades", [])
         if isinstance(item, dict)
     ][-500:]
+    sync_orders = [
+        _normalize_sync_order(item)
+        for item in payload.get("futu_sync_orders", [])
+        if isinstance(item, dict)
+    ][-500:]
     return {
         "id": portfolio_id,
         "name": name,
@@ -193,6 +222,7 @@ def _normalize_portfolio(payload: dict[str, Any]) -> dict[str, Any]:
         "parent_id": str(payload.get("parent_id") or ""),
         "positions": positions,
         "trades": trades,
+        "futu_sync_orders": sync_orders,
         "created_at": str(payload.get("created_at") or now),
         "updated_at": str(payload.get("updated_at") or now),
     }
@@ -260,6 +290,7 @@ def create_portfolio(name: str, *, base_currency: str = "HKD", cash: float = 0.0
         "futu_sync_enabled": False,
         "positions": [],
         "trades": [],
+        "futu_sync_orders": [],
         "created_at": now,
         "updated_at": now,
     }
@@ -309,6 +340,7 @@ def clone_portfolio(portfolio_id: str | None, *, name: str = "", apply_mode: str
         "parent_id": source.get("id", ""),
         "positions": [dict(position) for position in source.get("positions", [])],
         "trades": [],
+        "futu_sync_orders": [],
         "created_at": now,
         "updated_at": now,
     }
@@ -335,6 +367,52 @@ def update_portfolio_settings(
         portfolio["updated_at"] = _now()
         store["active_id"] = target_id
         return save_portfolios(store)
+    raise ValueError("portfolio not found")
+
+
+def record_futu_sync_order(portfolio_id: str | None, payload: dict[str, Any]) -> dict[str, Any]:
+    store = load_portfolios()
+    target_id = str(portfolio_id or store["active_id"])
+    sync_order = _normalize_sync_order(payload)
+    for portfolio in store["portfolios"]:
+        if portfolio["id"] != target_id:
+            continue
+        orders = [
+            _normalize_sync_order(item)
+            for item in portfolio.get("futu_sync_orders", [])
+            if isinstance(item, dict)
+        ]
+        order_id = sync_order.get("order_id")
+        if order_id:
+            orders = [item for item in orders if item.get("order_id") != order_id]
+        orders.append(sync_order)
+        portfolio["futu_sync_orders"] = orders[-500:]
+        portfolio["updated_at"] = _now()
+        return save_portfolios(store)
+    raise ValueError("portfolio not found")
+
+
+def update_futu_sync_order(portfolio_id: str | None, order_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    store = load_portfolios()
+    target_id = str(portfolio_id or store["active_id"])
+    order_id = str(order_id or "")
+    for portfolio in store["portfolios"]:
+        if portfolio["id"] != target_id:
+            continue
+        orders = [
+            _normalize_sync_order(item)
+            for item in portfolio.get("futu_sync_orders", [])
+            if isinstance(item, dict)
+        ]
+        for order in orders:
+            if str(order.get("order_id") or "") != order_id:
+                continue
+            order.update(updates)
+            order["updated_at"] = _now()
+            portfolio["futu_sync_orders"] = [_normalize_sync_order(item) for item in orders][-500:]
+            portfolio["updated_at"] = _now()
+            return save_portfolios(store)
+        raise ValueError("sync order not found")
     raise ValueError("portfolio not found")
 
 

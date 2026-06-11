@@ -505,7 +505,7 @@ textarea {
 
 .portfolio-settings {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, auto) auto;
   gap: 8px;
   align-items: end;
 }
@@ -523,6 +523,39 @@ textarea {
 .portfolio-cash-editor input,
 .portfolio-settings select {
   margin-top: 5px;
+}
+
+.portfolio-sync-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 7px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.portfolio-sync-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.portfolio-sync-toggle span {
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.portfolio-sync-toggle em {
+  grid-column: 2;
+  color: var(--amber);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 740;
 }
 
 .portfolio-cash-row {
@@ -1701,6 +1734,13 @@ pre {
 
   .watch-add-row {
     grid-template-columns: 1fr;
+  }
+
+  .portfolio-cash-editor,
+  .portfolio-settings,
+  .portfolio-clone-actions {
+    grid-template-columns: 1fr;
+    grid-auto-flow: row;
   }
 
   .button-row {

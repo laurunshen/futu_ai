@@ -17,14 +17,15 @@ from .auto_trader import AutoTrader
 from .chat_engine import run_ai_chat
 from .config import AppConfig, PROJECT_ROOT, public_config, save_runtime_risk_config
 from .futu_client import FutuPaperClient, _load_futu
+from .futu_sync import apply_order_with_optional_futu_sync, refresh_futu_sync_orders
 from .models import OrderIntent
 from .news_signals import load_news_signals
 from .portfolios import (
-    apply_order_to_portfolio,
     clone_portfolio,
     create_portfolio,
     delete_portfolio,
     delete_position,
+    get_portfolio,
     load_portfolios,
     set_active_portfolio,
     update_portfolio_cash,
@@ -500,7 +501,13 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     raise ValueError("decision_id is required")
                 entry = _find_decision(decision_id) or {}
                 existing_application = entry.get("application") if isinstance(entry.get("application"), dict) else {}
-                if existing_application.get("status") in {"applied", "already_applied"}:
+                if existing_application.get("status") in {
+                    "applied",
+                    "already_applied",
+                    "futu_submitted",
+                    "partially_applied",
+                    "local_apply_failed",
+                }:
                     self._send_json({"ok": True, "application": existing_application, "portfolio_payload": self._portfolio_payload()})
                     return
                 order = payload.get("order") or entry.get("order")
@@ -513,9 +520,12 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     raise ValueError("portfolio_id is required")
                 decision = entry.get("decision") if isinstance(entry.get("decision"), dict) else {}
                 fx_payload = self.client.fx_rates_to_hkd()
-                application = apply_order_to_portfolio(
-                    portfolio_id,
-                    order,
+                portfolio = get_portfolio(portfolio_id)
+                application = apply_order_with_optional_futu_sync(
+                    client=self.client,
+                    portfolio=portfolio,
+                    portfolio_id=portfolio_id,
+                    order_payload=order,
                     source="manual",
                     decision_id=decision_id,
                     reason=str(decision.get("reason") or order.get("reason") or ""),
@@ -589,6 +599,35 @@ class PaperWebHandler(BaseHTTPRequestHandler):
     def _portfolio_payload(self, store: dict[str, Any] | None = None) -> dict[str, Any]:
         store = store or load_portfolios()
         fx_payload = self.client.fx_rates_to_hkd()
+        futu_sync_results: list[dict[str, Any]] = []
+        for portfolio in store.get("portfolios", []):
+            if not portfolio.get("futu_sync_enabled"):
+                continue
+            if not any(
+                str(order.get("status") or "").lower()
+                in {"submitted", "futu_submitted", "partial", "partially_applied", "local_apply_failed"}
+                for order in portfolio.get("futu_sync_orders", [])
+                if isinstance(order, dict)
+            ):
+                continue
+            futu_sync_results.extend(
+                refresh_futu_sync_orders(
+                    client=self.client,
+                    portfolio=portfolio,
+                    fx_to_hkd=fx_payload.get("fx_to_hkd"),
+                    fx_source=str(fx_payload.get("source") or ""),
+                    fx_status=fx_payload,
+                )
+            )
+        for sync_result in futu_sync_results:
+            if not isinstance(sync_result, dict):
+                continue
+            decision_id = str(sync_result.get("decision_id") or "").strip()
+            application = sync_result.get("application")
+            if decision_id and isinstance(application, dict):
+                _mark_decision_application(decision_id, application)
+        if futu_sync_results:
+            store = load_portfolios()
         codes = sorted(
             {
                 str(position.get("code", "")).upper()
@@ -606,6 +645,13 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             portfolio_row["fx_ok"] = bool(fx_payload.get("ok"))
             portfolio_row["fx_error"] = fx_payload.get("error")
             portfolio_row["fx_updated_at"] = fx_payload.get("updated_at")
+            portfolio_row["futu_sync_pending_count"] = sum(
+                1
+                for order in portfolio.get("futu_sync_orders", [])
+                if isinstance(order, dict)
+                and str(order.get("status") or "").lower()
+                in {"submitted", "futu_submitted", "partial", "partially_applied", "local_apply_failed"}
+            )
             enriched_positions: list[dict[str, Any]] = []
             totals: dict[str, dict[str, float]] = {}
             for position in portfolio.get("positions", []):
@@ -648,6 +694,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             "portfolios": portfolios,
             "quote_error": quote_error,
             "fx": fx_payload,
+            "futu_sync_results": futu_sync_results,
         }
 
     def _serve_static(self, path: str, head_only: bool = False) -> None:
