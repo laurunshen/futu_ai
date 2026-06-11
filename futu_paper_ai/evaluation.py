@@ -572,21 +572,16 @@ def _equity_curve_for_portfolio(
         review = entry.get("review") if isinstance(entry.get("review"), dict) else {}
         baseline = review.get("portfolio_baseline") if isinstance(review.get("portfolio_baseline"), dict) else {}
         nav = _num(baseline.get("nav_hkd"), 0)
-        estimated = bool(baseline.get("estimated"))
         if nav <= 0:
-            cash = _num(entry_portfolio.get("cash"), 0)
-            currency = str(entry_portfolio.get("base_currency") or portfolio.get("base_currency") or "HKD").upper()
-            nav = _to_hkd(cash, currency, _rates_to_hkd(entry_portfolio or portfolio))
-            estimated = True
-        if nav > 0:
-            points.append(
-                {
-                    "timestamp": entry.get("timestamp") or entry.get("ts") or "",
-                    "nav_hkd": round(nav, 4),
-                    "source": "decision_baseline" if baseline else "decision_cash_fallback",
-                    "estimated": estimated,
-                }
-            )
+            continue
+        points.append(
+            {
+                "timestamp": entry.get("timestamp") or entry.get("ts") or "",
+                "nav_hkd": round(nav, 4),
+                "source": "decision_baseline",
+                "estimated": bool(baseline.get("estimated")),
+            }
+        )
     if _num(current_nav.get("nav_hkd"), 0) > 0:
         points.append(
             {
