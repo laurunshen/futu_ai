@@ -7,7 +7,7 @@ const state = {
   selectedDecisionIndex: null,
   decisionPage: 1,
   decisionTotalPages: 1,
-  decisionPortfolioId: "",
+  decisionPortfolioId: "ALL",
   newsSignals: [],
   newsPayload: null,
   newsPage: 1,
@@ -358,16 +358,12 @@ function renderDecisionPortfolioOptions({ followActive = false } = {}) {
   const select = el("decisionPortfolio");
   if (!select) return;
   const portfolioIds = new Set(state.portfolios.map((portfolio) => portfolio.id));
-  const hasLoadedOptions = select.dataset.loaded === "true";
-  const current = followActive
-    ? state.activePortfolioId
-    : state.decisionPortfolioId || (hasLoadedOptions ? select.value : state.activePortfolioId) || "ALL";
+  const current = followActive ? state.activePortfolioId : state.decisionPortfolioId || select.value || "ALL";
   select.innerHTML = [
     `<option value="ALL">全部模拟盘</option>`,
     ...state.portfolios.map((portfolio) => `<option value="${html(portfolio.id)}">${html(portfolio.name)}</option>`),
   ].join("");
   select.value = portfolioIds.has(current) || current === "ALL" ? current : state.activePortfolioId || "ALL";
-  select.dataset.loaded = "true";
   state.decisionPortfolioId = select.value;
 }
 
