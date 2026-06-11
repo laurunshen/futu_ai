@@ -1280,10 +1280,25 @@ tr:last-child td {
 }
 
 .equity-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 4px 9px;
   background: #fbfcfd;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.equity-legend-item:hover {
+  border-color: rgba(28, 109, 208, 0.32);
+  background: #f7fbff;
+}
+
+.equity-legend-item.muted {
+  opacity: 0.58;
+  text-decoration: line-through;
 }
 
 .equity-legend-item strong {

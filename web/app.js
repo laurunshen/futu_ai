@@ -10,6 +10,7 @@ const state = {
   decisionPortfolioId: "ALL",
   evaluation: null,
   evaluationPortfolioId: "ALL",
+  equityHiddenPortfolioIds: new Set(),
   newsSignals: [],
   newsPayload: null,
   newsPage: 1,
@@ -963,27 +964,46 @@ function renderEvaluationSummary(payload) {
 }
 
 function renderEquity(curves) {
-  drawEquityChart(curves);
-  const legend = el("equityLegend");
   const rows = (curves || []).filter((curve) => (curve.points || []).length);
+  const colors = chartColors();
+  const colorByPortfolio = new Map(rows.map((curve, index) => [String(curve.portfolio_id || ""), colors[index % colors.length]]));
+  const visibleRows = rows
+    .filter((curve) => !state.equityHiddenPortfolioIds.has(String(curve.portfolio_id || "")))
+    .map((curve) => ({ ...curve, chart_color: colorByPortfolio.get(String(curve.portfolio_id || "")) }));
+  drawEquityChart(visibleRows);
+  const legend = el("equityLegend");
   if (!rows.length) {
     legend.innerHTML = `<div class="empty compact-empty">暂无收益曲线点。新决策会自动写入组合净值基线。</div>`;
     return;
   }
-  const colors = chartColors();
   legend.innerHTML = rows
-    .map((curve, index) => {
+    .map((curve) => {
       const stats = curve.stats || {};
+      const portfolioId = String(curve.portfolio_id || "");
+      const hidden = state.equityHiddenPortfolioIds.has(portfolioId);
+      const color = colorByPortfolio.get(portfolioId) || colors[0];
       return `
-        <div class="equity-legend-item">
-          <span class="legend-swatch" style="background:${colors[index % colors.length]}"></span>
+        <button type="button" class="equity-legend-item ${hidden ? "muted" : ""}" data-equity-toggle="${html(portfolioId)}" aria-pressed="${hidden ? "false" : "true"}">
+          <span class="legend-swatch" style="background:${hidden ? "#aab4bb" : color}"></span>
           <span>${html(portfolioNameById(curve.portfolio_id))}</span>
           <strong>${html(fmtPct(stats.return_pct))}</strong>
           <em>回撤 ${html(fmtPct(stats.max_drawdown_pct))}</em>
-        </div>
+        </button>
       `;
     })
     .join("");
+  legend.querySelectorAll("[data-equity-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const portfolioId = String(button.dataset.equityToggle || "");
+      if (!portfolioId) return;
+      if (state.equityHiddenPortfolioIds.has(portfolioId)) {
+        state.equityHiddenPortfolioIds.delete(portfolioId);
+      } else {
+        state.equityHiddenPortfolioIds.add(portfolioId);
+      }
+      renderEquity(state.evaluation?.equity_curves || []);
+    });
+  });
 }
 
 function chartColors() {
@@ -1062,7 +1082,7 @@ function drawEquityChart(curves) {
 
   const colors = chartColors();
   series.forEach((curve, index) => {
-    const color = colors[index % colors.length];
+    const color = curve.chart_color || colors[index % colors.length];
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 2;
@@ -2402,6 +2422,9 @@ function bindButtons() {
   });
   el("evaluationPortfolio").addEventListener("change", () => {
     state.evaluationPortfolioId = el("evaluationPortfolio").value;
+    if (state.evaluationPortfolioId && state.evaluationPortfolioId !== "ALL") {
+      state.equityHiddenPortfolioIds.delete(state.evaluationPortfolioId);
+    }
     refreshEvaluation();
   });
   el("evaluationStart").addEventListener("change", refreshEvaluation);
