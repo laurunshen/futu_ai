@@ -508,6 +508,7 @@ function renderPortfolioDetails(portfolio, quoteError = "") {
   renderPortfolioSummary(portfolio, quoteError);
   renderPortfolioPositions(portfolio);
   renderPortfolioOperations(portfolio);
+  renderPortfolioTradeAction(portfolio);
 }
 
 function renderPortfolioSummary(portfolio, quoteError = "") {
@@ -776,6 +777,17 @@ function renderPortfolioOperations(portfolio) {
       `;
     })
     .join("");
+}
+
+function renderPortfolioTradeAction(portfolio) {
+  const button = el("recordPortfolioTrade");
+  if (!button) return;
+  const syncEnabled = Boolean(portfolio?.futu_sync_enabled);
+  button.textContent = syncEnabled ? "提交富途模拟单" : "记录本人交易";
+  const reasonInput = el("portfolioTradeReason");
+  if (reasonInput) {
+    reasonInput.placeholder = syncEnabled ? "富途模拟单备注、交易理由" : "本人券商实际买入/卖出、调仓原因";
+  }
 }
 
 function renderAccount(row) {
@@ -1890,10 +1902,15 @@ function portfolioTradePayload() {
 
 async function recordPortfolioTrade() {
   if (!state.activePortfolioId) return;
+  const portfolio = activePortfolio();
   const order = portfolioTradePayload();
   if (!order.code || order.qty <= 0 || order.price <= 0) {
     el("portfolioTradeCode").focus();
     return;
+  }
+  if (portfolio?.futu_sync_enabled) {
+    const ok = window.confirm(`提交富途模拟单确认：${order.side} ${order.qty} ${order.code} @ ${order.price}`);
+    if (!ok) return;
   }
   try {
     const payload = await api("/api/portfolios/trade", {

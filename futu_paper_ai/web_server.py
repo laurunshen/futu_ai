@@ -21,7 +21,6 @@ from .futu_sync import apply_order_with_optional_futu_sync, refresh_futu_sync_or
 from .models import OrderIntent
 from .news_signals import load_news_signals
 from .portfolios import (
-    apply_order_to_portfolio,
     clone_portfolio,
     create_portfolio,
     delete_portfolio,
@@ -499,17 +498,21 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/trade":
                 fx_payload = self.client.fx_rates_to_hkd()
-                application = apply_order_to_portfolio(
-                    str(payload.get("portfolio_id", "")).strip() or None,
-                    payload.get("order", payload),
+                portfolio_id = str(payload.get("portfolio_id", "")).strip() or None
+                portfolio = get_portfolio(portfolio_id)
+                application = apply_order_with_optional_futu_sync(
+                    client=self.client,
+                    portfolio=portfolio,
+                    portfolio_id=str(portfolio.get("id") or portfolio_id or ""),
+                    order_payload=payload.get("order", payload),
                     source="user_trade",
                     decision_id="",
-                    reason=str(payload.get("reason", "")).strip() or "User recorded broker trade",
+                    reason=str(payload.get("reason", "")).strip() or "用户在组合页提交/记录交易",
                     fx_to_hkd=fx_payload.get("fx_to_hkd"),
                     fx_source=str(fx_payload.get("source") or ""),
                     fx_status=fx_payload,
                 )
-                self._send_json({"ok": True, "application": application, "portfolio_payload": self._portfolio_payload()})
+                self._send_json({"ok": bool(application.get("ok", True)), "application": application, "portfolio_payload": self._portfolio_payload()})
             elif path == "/api/decisions/apply":
                 decision_id = str(payload.get("decision_id", "")).strip()
                 if not decision_id:
