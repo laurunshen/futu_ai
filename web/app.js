@@ -1,5 +1,5 @@
 const state = {
-  activeTab: "overview",
+  activeTab: "portfolio",
   accountMarket: "US",
   side: "BUY",
   config: null,
@@ -23,9 +23,12 @@ const state = {
 const el = (id) => document.getElementById(id);
 
 function setActiveTab(tab) {
+  if (tab === "overview" || tab === "debug") {
+    tab = tab === "debug" ? "settings" : "portfolio";
+  }
   let nextPanel = document.querySelector(`[data-tab-panel="${tab}"]`);
   if (!nextPanel) {
-    tab = "overview";
+    tab = "portfolio";
     nextPanel = document.querySelector(`[data-tab-panel="${tab}"]`);
   }
   if (!nextPanel) return;

@@ -19,21 +19,20 @@
     </header>
 
     <nav class="tabbar" aria-label="工作区">
-      <button type="button" class="tab-button active" data-tab="overview" aria-selected="true">总览</button>
-      <button type="button" class="tab-button" data-tab="market" aria-selected="false">行情</button>
-      <button type="button" class="tab-button" data-tab="portfolio" aria-selected="false">模拟盘</button>
-      <button type="button" class="tab-button" data-tab="chat" aria-selected="false">AI 对话</button>
+      <button type="button" class="tab-button active" data-tab="portfolio" aria-selected="true">模拟盘</button>
       <button type="button" class="tab-button" data-tab="decisions" aria-selected="false">AI 决策</button>
+      <button type="button" class="tab-button" data-tab="market" aria-selected="false">行情</button>
       <button type="button" class="tab-button" data-tab="news" aria-selected="false">新闻</button>
-      <button type="button" class="tab-button" data-tab="debug" aria-selected="false">调试</button>
+      <button type="button" class="tab-button" data-tab="chat" aria-selected="false">AI 对话</button>
+      <button type="button" class="tab-button" data-tab="settings" aria-selected="false">设置</button>
     </nav>
 
     <main class="workspace">
-      <section class="tab-panel active" data-tab-panel="overview">
+      <section class="tab-panel" data-tab-panel="settings">
         <div class="tab-grid">
           <div class="panel span-4 overview-account">
             <div class="panel-head">
-              <h2>账户</h2>
+              <h2>富途账户</h2>
               <div class="segmented" role="group" aria-label="账户市场">
                 <button class="segment active" data-account-market="US">US</button>
                 <button class="segment" data-account-market="HK">HK</button>
@@ -44,7 +43,7 @@
 
           <div class="panel span-8 overview-gemini">
             <div class="panel-head">
-              <h2>Gemini</h2>
+              <h2>手动扫描</h2>
               <span class="pill">AUTO · PAPER</span>
             </div>
             <label class="wide-field">
@@ -103,7 +102,7 @@
 
           <div class="panel span-12 overview-positions">
             <div class="panel-head">
-              <h2>持仓</h2>
+              <h2>富途持仓</h2>
               <button class="icon-button" id="refreshPositions" title="刷新持仓" aria-label="刷新持仓">↻</button>
             </div>
             <div class="table-wrap">
@@ -123,7 +122,7 @@
 
           <div class="panel span-12 overview-risk">
             <div class="panel-head">
-              <h2>风控</h2>
+              <h2>风控设置</h2>
               <button class="icon-button" id="refreshConfig" title="刷新配置" aria-label="刷新配置">↻</button>
             </div>
             <div class="risk-list" id="riskList"></div>
@@ -171,6 +170,22 @@
               <button type="button" class="primary-wide" id="saveRiskConfig">保存风控</button>
             </form>
           </div>
+
+          <div class="panel span-5">
+            <div class="panel-head">
+              <h2>Gemini 用量</h2>
+              <button class="icon-button" id="refreshGeminiUsage" title="刷新用量" aria-label="刷新用量">↻</button>
+            </div>
+            <div class="usage-grid" id="geminiUsageGrid"></div>
+          </div>
+
+          <div class="panel span-7">
+            <div class="panel-head">
+              <h2>系统输出</h2>
+              <button class="icon-button" id="clearOutput" title="清空输出" aria-label="清空输出">×</button>
+            </div>
+            <pre id="outputBox">{}</pre>
+          </div>
         </div>
       </section>
 
@@ -202,7 +217,7 @@
         </div>
       </section>
 
-      <section class="tab-panel" data-tab-panel="portfolio">
+      <section class="tab-panel active" data-tab-panel="portfolio">
         <div class="tab-grid">
           <aside class="panel span-4">
             <div class="panel-head">
@@ -424,25 +439,6 @@
         </div>
       </section>
 
-      <section class="tab-panel" data-tab-panel="debug">
-        <div class="tab-grid">
-          <div class="panel span-5">
-            <div class="panel-head">
-              <h2>Gemini 用量</h2>
-              <button class="icon-button" id="refreshGeminiUsage" title="刷新用量" aria-label="刷新用量">↻</button>
-            </div>
-            <div class="usage-grid" id="geminiUsageGrid"></div>
-          </div>
-
-          <div class="panel span-7">
-            <div class="panel-head">
-              <h2>调试输出</h2>
-              <button class="icon-button" id="clearOutput" title="清空输出" aria-label="清空输出">×</button>
-            </div>
-            <pre id="outputBox">{}</pre>
-          </div>
-        </div>
-      </section>
     </main>
 
     <script src="/app.js"></script>
