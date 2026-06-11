@@ -273,6 +273,7 @@ def run_ai_chat(
         }
 
     client = genai.Client(api_key=config.gemini.api_key)
+    max_output_tokens = max(1024, min(int(config.gemini.chat_max_output_tokens or 8000), 20000))
     prompt = _build_prompt(
         topic=topic,
         messages=clean_messages,
@@ -295,7 +296,7 @@ def run_ai_chat(
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.25,
-                max_output_tokens=3200,
+                max_output_tokens=max_output_tokens,
                 tools=tools,
             ),
         )
@@ -321,7 +322,7 @@ def run_ai_chat(
             ),
             config=types.GenerateContentConfig(
                 temperature=0.25,
-                max_output_tokens=3200,
+                max_output_tokens=max_output_tokens,
             ),
         )
 
@@ -335,5 +336,6 @@ def run_ai_chat(
         "trading_context": trading_context,
         "news_signals": news_payload.get("signals", []),
         "news_notes": news_payload.get("notes", []),
+        "max_output_tokens": max_output_tokens,
         "gemini_usage": _usage_to_dict(getattr(response, "usage_metadata", None)),
     }

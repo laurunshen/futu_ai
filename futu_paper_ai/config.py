@@ -94,6 +94,7 @@ class GeminiConfig:
     cooldown_minutes: int
     loop_interval_seconds: int
     candidate_count: int
+    chat_max_output_tokens: int
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,7 @@ class AppConfig:
                 cooldown_minutes=_int_env("GEMINI_COOLDOWN_MINUTES", 60),
                 loop_interval_seconds=_int_env("GEMINI_LOOP_INTERVAL_SECONDS", 300),
                 candidate_count=_int_env("GEMINI_CANDIDATE_COUNT", 8),
+                chat_max_output_tokens=_int_env("GEMINI_CHAT_MAX_OUTPUT_TOKENS", 8000),
             ),
             news=NewsConfig(
                 autonews_db_path=os.environ.get("AUTONEWS_DB_PATH", "").strip(),
