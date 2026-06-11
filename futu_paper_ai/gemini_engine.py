@@ -144,6 +144,8 @@ class GeminiDecisionEngine:
             "- 这是模拟盘，但也要当作真实训练处理。\n"
             "- 不要编造新闻、财报、宏观事件或价格数据。\n"
             "- 如果没有消息源，只能使用快照中的价格、成交量、振幅、买卖价、资金和持仓。\n"
+            "- 当前价只能来自候选行情或持仓上下文里的 last_price/bid_price/ask_price/update_time；消息源和网页价格不能当作当前价。\n"
+            "- 如果持仓上下文包含 local_portfolio 或 price_source=Futu OpenD snapshot，必须优先使用这些持仓成本和快照价。\n"
             "- 买入必须说明为什么现在值得试错。\n"
             "- 卖出只能针对已有持仓，不能建议裸卖空。\n"
             "- confidence 低于 70 时应优先 HOLD。\n"

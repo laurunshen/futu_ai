@@ -21,6 +21,7 @@
     <nav class="tabbar" aria-label="工作区">
       <button type="button" class="tab-button active" data-tab="overview" aria-selected="true">总览</button>
       <button type="button" class="tab-button" data-tab="market" aria-selected="false">行情</button>
+      <button type="button" class="tab-button" data-tab="portfolio" aria-selected="false">模拟盘</button>
       <button type="button" class="tab-button" data-tab="chat" aria-selected="false">AI 对话</button>
       <button type="button" class="tab-button" data-tab="decisions" aria-selected="false">AI 决策</button>
       <button type="button" class="tab-button" data-tab="news" aria-selected="false">新闻</button>
@@ -52,7 +53,7 @@
             </label>
             <label class="check-row">
               <input id="aiExecute" type="checkbox" checked>
-              <span>允许本次通过风控后自动执行模拟单</span>
+              <span>扫描所有本地模拟盘；当前仅生成建议，不提交订单</span>
             </label>
             <button type="button" class="primary-wide" id="runGemini">Gemini 扫描一次</button>
           </div>
@@ -201,6 +202,72 @@
         </div>
       </section>
 
+      <section class="tab-panel" data-tab-panel="portfolio">
+        <div class="tab-grid">
+          <aside class="panel span-4">
+            <div class="panel-head">
+              <h2>模拟盘</h2>
+              <button class="icon-button" id="refreshPortfolios" title="刷新模拟盘" aria-label="刷新模拟盘">↻</button>
+            </div>
+            <div class="portfolio-list" id="portfolioList"></div>
+            <div class="portfolio-create">
+              <input id="portfolioName" placeholder="新模拟盘名称" autocomplete="off">
+              <div class="portfolio-create-grid">
+                <select id="portfolioCurrency" aria-label="基础币种">
+                  <option value="HKD">HKD</option>
+                  <option value="USD">USD</option>
+                  <option value="CNY">CNY</option>
+                </select>
+                <input id="portfolioCash" type="number" min="0" step="1" value="0" aria-label="现金">
+              </div>
+              <button type="button" class="secondary compact" id="createPortfolio">新增模拟盘</button>
+            </div>
+          </aside>
+
+          <div class="panel span-8">
+            <div class="panel-head">
+              <h2 id="activePortfolioTitle">持仓</h2>
+              <span class="detail-status" id="portfolioQuoteStatus">行情待刷新</span>
+            </div>
+            <div class="portfolio-summary" id="portfolioSummary"></div>
+            <form class="position-form" id="portfolioPositionForm">
+              <div class="field-grid">
+                <label>
+                  代码
+                  <input id="portfolioPositionCode" placeholder="HK.09988 或 PDD" autocomplete="off">
+                </label>
+                <label>
+                  名称
+                  <input id="portfolioPositionName" placeholder="阿里巴巴-W" autocomplete="off">
+                </label>
+                <label>
+                  数量
+                  <input id="portfolioPositionQty" type="number" min="0" step="1" value="1">
+                </label>
+                <label>
+                  成本价
+                  <input id="portfolioPositionCost" type="number" min="0" step="0.01" value="1">
+                </label>
+                <label>
+                  币种
+                  <select id="portfolioPositionCurrency">
+                    <option value="HKD">HKD</option>
+                    <option value="USD">USD</option>
+                    <option value="CNY">CNY</option>
+                  </select>
+                </label>
+                <label>
+                  备注
+                  <input id="portfolioPositionNote" placeholder="短线波段、真实持仓等" autocomplete="off">
+                </label>
+              </div>
+              <button type="button" class="primary-wide" id="savePortfolioPosition">保存持仓</button>
+            </form>
+            <div class="portfolio-position-list" id="portfolioPositions"></div>
+          </div>
+        </div>
+      </section>
+
       <section class="tab-panel" data-tab-panel="chat">
         <div class="tab-grid chat-layout">
           <aside class="panel span-4 chat-settings">
@@ -211,6 +278,10 @@
             <label class="wide-field">
               讨论对象
               <input id="chatTopic" placeholder="US.NVDA、HK.00700 或 AI 芯片" autocomplete="off">
+            </label>
+            <label class="wide-field">
+              参考模拟盘
+              <select id="chatPortfolio"></select>
             </label>
             <div class="chat-switches">
               <label class="check-row">

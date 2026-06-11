@@ -12,6 +12,8 @@ const state = {
   newsPage: 1,
   newsTotalPages: 1,
   riskAllowedCodes: [],
+  portfolios: [],
+  activePortfolioId: "",
   chatMessages: [],
   chatBusy: false,
   myWatchlistTimer: null,
@@ -181,6 +183,19 @@ async function refreshMyWatchlist({ silent = false } = {}) {
   }
 }
 
+async function refreshPortfolios({ silent = false } = {}) {
+  try {
+    const payload = await api("/api/portfolios");
+    renderPortfolios(payload);
+    if (!silent) showOutput(payload);
+  } catch (err) {
+    el("portfolioList").innerHTML = `<div class="empty">Portfolios unavailable</div>`;
+    el("portfolioPositions").innerHTML = `<div class="empty">Positions unavailable</div>`;
+    renderChatPortfolioOptions();
+    if (!silent) showOutput(err);
+  }
+}
+
 async function refreshDecisions() {
   const params = new URLSearchParams({
     page: String(state.decisionPage),
@@ -319,6 +334,149 @@ function renderMyWatchlist(payload) {
 
   grid.querySelectorAll("[data-watch-remove]").forEach((button) => {
     button.addEventListener("click", () => removeMyWatch(button.dataset.watchRemove));
+  });
+}
+
+function activePortfolio() {
+  return state.portfolios.find((portfolio) => portfolio.id === state.activePortfolioId) || state.portfolios[0] || null;
+}
+
+function renderChatPortfolioOptions() {
+  const select = el("chatPortfolio");
+  if (!select) return;
+  const current = select.value || state.activePortfolioId;
+  select.innerHTML = state.portfolios
+    .map((portfolio) => `<option value="${html(portfolio.id)}">${html(portfolio.name)}</option>`)
+    .join("");
+  select.value = state.portfolios.some((portfolio) => portfolio.id === current) ? current : state.activePortfolioId;
+}
+
+function renderPortfolios(payload) {
+  state.portfolios = payload.portfolios || [];
+  state.activePortfolioId = payload.active_id || state.portfolios[0]?.id || "";
+  const list = el("portfolioList");
+  if (!state.portfolios.length) {
+    list.innerHTML = `<div class="empty">No portfolios</div>`;
+    renderPortfolioDetails(null, payload.quote_error);
+    renderChatPortfolioOptions();
+    return;
+  }
+
+  list.innerHTML = state.portfolios
+    .map((portfolio) => {
+      const active = portfolio.id === state.activePortfolioId;
+      const totals = Object.entries(portfolio.totals_by_currency || {})
+        .map(([currency, row]) => `${currency} ${fmt(row.market_value || row.cost_value || 0)}`)
+        .join(" · ");
+      return `
+        <article class="portfolio-item ${active ? "active" : ""}">
+          <button type="button" class="portfolio-main" data-portfolio-active="${html(portfolio.id)}">
+            <span class="portfolio-name">${html(portfolio.name)}</span>
+            <span class="portfolio-meta">${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
+          </button>
+          <button type="button" class="portfolio-delete" data-portfolio-delete="${html(portfolio.id)}" title="删除模拟盘" aria-label="删除 ${html(portfolio.name)}">×</button>
+        </article>
+      `;
+    })
+    .join("");
+
+  list.querySelectorAll("[data-portfolio-active]").forEach((button) => {
+    button.addEventListener("click", () => setActivePortfolio(button.dataset.portfolioActive));
+  });
+  list.querySelectorAll("[data-portfolio-delete]").forEach((button) => {
+    button.addEventListener("click", () => deletePortfolio(button.dataset.portfolioDelete));
+  });
+
+  renderPortfolioDetails(activePortfolio(), payload.quote_error);
+  renderChatPortfolioOptions();
+}
+
+function renderPortfolioDetails(portfolio, quoteError = "") {
+  el("activePortfolioTitle").textContent = portfolio ? `${portfolio.name} · 持仓` : "持仓";
+  el("portfolioQuoteStatus").textContent = quoteError ? "行情异常" : "OpenD 行情";
+  el("portfolioQuoteStatus").className = `detail-status ${quoteError ? "sell" : "buy"}`;
+  renderPortfolioSummary(portfolio, quoteError);
+  renderPortfolioPositions(portfolio);
+}
+
+function renderPortfolioSummary(portfolio, quoteError = "") {
+  const target = el("portfolioSummary");
+  if (!portfolio) {
+    target.innerHTML = `<div class="empty">未选择模拟盘</div>`;
+    return;
+  }
+  const totals = Object.entries(portfolio.totals_by_currency || {});
+  const totalCards = totals.length
+    ? totals
+        .map(([currency, row]) => {
+          const pl = Number(row.pl_value || 0);
+          const cls = changeClass(pl);
+          return `
+            <div class="metric">
+              <div class="metric-label">${html(currency)} Market / P&L</div>
+              <div class="metric-value">${html(fmt(row.market_value || 0))}</div>
+              <div class="portfolio-pl ${cls}">${html(fmt(pl))}</div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="metric"><div class="metric-label">Positions</div><div class="metric-value">0</div></div>`;
+  target.innerHTML = `
+    <div class="metric-grid">
+      <div class="metric">
+        <div class="metric-label">Cash ${html(portfolio.base_currency)}</div>
+        <div class="metric-value">${html(fmt(portfolio.cash || 0))}</div>
+      </div>
+      ${totalCards}
+    </div>
+    ${quoteError ? `<div class="chat-warning">${html(quoteError)}</div>` : ""}
+  `;
+}
+
+function renderPortfolioPositions(portfolio) {
+  const list = el("portfolioPositions");
+  const rows = portfolio?.positions || [];
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">还没有持仓。录入你的真实持仓后，AI 对话和自动周期会把它当作组合上下文。</div>`;
+    return;
+  }
+  list.innerHTML = rows
+    .map((row) => {
+      const plRatio = Number(row.pl_ratio);
+      const cls = changeClass(plRatio);
+      return `
+        <article class="portfolio-position">
+          <div class="portfolio-position-main">
+            <div>
+              <div class="portfolio-position-code">${html(row.code)}</div>
+              <div class="portfolio-position-name">${html(row.name || row.note || row.market)}</div>
+            </div>
+            <div class="portfolio-position-price">
+              <span>${html(row.last_price ?? "-")}</span>
+              <small>${html(row.price_source || "无行情")}</small>
+            </div>
+          </div>
+          <div class="portfolio-position-grid">
+            <span>数量 ${html(row.qty)}</span>
+            <span>成本 ${html(row.cost_price)} ${html(row.currency)}</span>
+            <span>市值 ${html(row.market_value ?? "-")}</span>
+            <span class="${cls}">盈亏 ${html(row.pl_value ?? "-")} / ${Number.isFinite(plRatio) ? `${plRatio.toFixed(2)}%` : "-"}</span>
+          </div>
+          ${row.note ? `<div class="learning-note">${html(row.note)}</div>` : ""}
+          <div class="portfolio-position-actions">
+            <button type="button" class="secondary compact" data-position-edit="${html(row.code)}">编辑</button>
+            <button type="button" class="danger compact" data-position-delete="${html(row.code)}">删除</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  list.querySelectorAll("[data-position-edit]").forEach((button) => {
+    button.addEventListener("click", () => editPortfolioPosition(button.dataset.positionEdit));
+  });
+  list.querySelectorAll("[data-position-delete]").forEach((button) => {
+    button.addEventListener("click", () => deletePortfolioPosition(button.dataset.positionDelete));
   });
 }
 
@@ -607,6 +765,7 @@ function renderFilteredNewsSignals() {
 function executionLabel(row) {
   if (row.execution?.ok && row.execution?.mode === "paper_execute") return "已执行";
   if (row.execution?.ok && row.execution?.mode === "paper_dry_run") return "Dry-run";
+  if (row.execution?.ok && row.execution?.mode === "portfolio_suggestion") return "组合建议";
   if (row.execution && row.execution.ok === false) return "执行失败";
   if ((row.blocked_reasons || []).length) return "已阻止";
   if (row.order) return "待执行";
@@ -859,6 +1018,7 @@ function renderDecisionDetail(row) {
   const order = row.order || null;
   const execution = row.execution || null;
   const usage = row.gemini_usage || {};
+  const portfolio = row.portfolio || null;
   const newsNotes = Array.isArray(row.news_notes) ? row.news_notes : [];
   const newsSignals = Array.isArray(row.news_signals) ? row.news_signals : [];
   const outputTokens = (Number(usage.candidates_token_count) || 0) + (Number(usage.thoughts_token_count) || 0);
@@ -871,7 +1031,7 @@ function renderDecisionDetail(row) {
       <div class="detail-hero-top">
         <div>
           <div class="detail-title">${html(decision.code || "NONE")}</div>
-          <div class="detail-subtitle">${html(fmtTime(row.timestamp || row.ts))} · ${html(row.mode)} · ${html(executionLabel(row))}</div>
+          <div class="detail-subtitle">${html(fmtTime(row.timestamp || row.ts))} · ${html(portfolio?.name || row.source || row.mode)} · ${html(executionLabel(row))}</div>
         </div>
         <span class="decision-action ${html(action)}">${html(decision.action || "UNKNOWN")}</span>
       </div>
@@ -913,6 +1073,15 @@ function renderDecisionDetail(row) {
           ])
         : detailText("未执行")
     )}
+    ${portfolio ? detailSection(
+      "模拟盘",
+      detailKvGrid([
+        ["名称", portfolio.name],
+        ["币种", portfolio.base_currency],
+        ["现金", portfolio.cash],
+        ["持仓数", portfolio.position_count],
+      ])
+    ) : ""}
     ${detailSection("候选标的", renderDetailCandidates(row.candidates || []))}
     ${detailSection("新闻摘要", renderDetailNewsSignals(newsSignals, newsNotes))}
     ${detailSection(
@@ -955,6 +1124,7 @@ function renderDecisions(rows) {
     .map((row, index) => {
       const decision = row.decision || {};
       const action = String(decision.action || "UNKNOWN").toLowerCase();
+      const portfolio = row.portfolio || null;
       const candidates = (row.candidates || [])
         .slice(0, 3)
         .map((item) => `<span class="candidate-chip">${html(item.code)} ${html(item.change_pct)}%</span>`)
@@ -967,7 +1137,7 @@ function renderDecisions(rows) {
           <div class="decision-top">
             <div>
               <div class="decision-code">${html(decision.code || "NONE")}</div>
-              <div class="decision-time">${html(fmtTime(row.timestamp || row.ts))} · ${html(row.mode)}</div>
+              <div class="decision-time">${html(fmtTime(row.timestamp || row.ts))} · ${html(portfolio?.name || row.source || row.mode)}</div>
             </div>
             <div class="decision-badges">
               <span class="decision-action ${html(action)}">${html(decision.action || "UNKNOWN")}</span>
@@ -1060,6 +1230,7 @@ async function runGemini() {
     await refreshDecisions();
     await refreshGeminiUsage();
     await refreshNewsSignals({ silent: true });
+    await refreshPortfolios({ silent: true });
     await refreshAccount();
     await refreshPositions();
   } catch (err) {
@@ -1092,6 +1263,7 @@ async function sendChat() {
         messages: state.chatMessages.map((message) => ({ role: message.role, content: message.content })),
         use_news: el("chatUseNews").checked,
         use_web: el("chatUseWeb").checked,
+        portfolio_id: el("chatPortfolio").value || state.activePortfolioId,
       }),
     });
     state.chatMessages.push({
@@ -1128,6 +1300,119 @@ function clearChat() {
   el("chatInput").focus();
 }
 
+async function createPortfolio() {
+  const name = el("portfolioName").value.trim();
+  if (!name) {
+    el("portfolioName").focus();
+    return;
+  }
+  try {
+    const payload = await api("/api/portfolios/create", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        base_currency: el("portfolioCurrency").value,
+        cash: Number(el("portfolioCash").value || 0),
+      }),
+    });
+    el("portfolioName").value = "";
+    renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function setActivePortfolio(portfolioId) {
+  if (!portfolioId) return;
+  try {
+    const payload = await api("/api/portfolios/active", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_id: portfolioId }),
+    });
+    renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function deletePortfolio(portfolioId) {
+  if (!portfolioId) return;
+  const portfolio = state.portfolios.find((item) => item.id === portfolioId);
+  if (!window.confirm(`删除模拟盘：${portfolio?.name || portfolioId}？`)) return;
+  try {
+    const payload = await api("/api/portfolios/delete", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_id: portfolioId }),
+    });
+    renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+function portfolioPositionPayload() {
+  return {
+    code: normalizeRiskCode(el("portfolioPositionCode").value),
+    name: el("portfolioPositionName").value.trim(),
+    qty: Number(el("portfolioPositionQty").value || 0),
+    cost_price: Number(el("portfolioPositionCost").value || 0),
+    currency: el("portfolioPositionCurrency").value,
+    note: el("portfolioPositionNote").value.trim(),
+  };
+}
+
+async function savePortfolioPosition() {
+  const position = portfolioPositionPayload();
+  if (!position.code || position.qty <= 0 || position.cost_price <= 0) {
+    el("portfolioPositionCode").focus();
+    return;
+  }
+  try {
+    const payload = await api("/api/portfolios/position", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_id: state.activePortfolioId, position }),
+    });
+    el("portfolioPositionCode").value = "";
+    el("portfolioPositionName").value = "";
+    el("portfolioPositionQty").value = "1";
+    el("portfolioPositionCost").value = "1";
+    el("portfolioPositionNote").value = "";
+    renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+function editPortfolioPosition(code) {
+  const row = activePortfolio()?.positions?.find((position) => position.code === code);
+  if (!row) return;
+  el("portfolioPositionCode").value = row.code || "";
+  el("portfolioPositionName").value = row.name || "";
+  el("portfolioPositionQty").value = row.qty || "";
+  el("portfolioPositionCost").value = row.cost_price || "";
+  el("portfolioPositionCurrency").value = row.currency || "HKD";
+  el("portfolioPositionNote").value = row.note || "";
+  el("portfolioPositionCode").focus();
+}
+
+async function deletePortfolioPosition(code) {
+  if (!code || !window.confirm(`删除持仓：${code}？`)) return;
+  try {
+    const payload = await api("/api/portfolios/position/delete", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_id: state.activePortfolioId, code }),
+    });
+    renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
 function bindSegments() {
   document.querySelectorAll("[data-account-market]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -1156,6 +1441,21 @@ function bindButtons() {
     if (event.key === "Enter") {
       event.preventDefault();
       addMyWatch();
+    }
+  });
+  el("refreshPortfolios").addEventListener("click", () => refreshPortfolios());
+  el("createPortfolio").addEventListener("click", createPortfolio);
+  el("portfolioName").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      createPortfolio();
+    }
+  });
+  el("savePortfolioPosition").addEventListener("click", savePortfolioPosition);
+  el("portfolioPositionCode").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      savePortfolioPosition();
     }
   });
   el("refreshPositions").addEventListener("click", refreshPositions);
@@ -1256,6 +1556,7 @@ async function init() {
   bindSegments();
   bindButtons();
   renderChatMessages();
+  await refreshPortfolios({ silent: true });
   await refreshStatus();
   await refreshSnapshot();
   await refreshMyWatchlist({ silent: true });

@@ -19,6 +19,14 @@ from .config import AppConfig, PROJECT_ROOT, public_config, save_runtime_risk_co
 from .futu_client import FutuPaperClient, _load_futu
 from .models import OrderIntent
 from .news_signals import load_news_signals
+from .portfolios import (
+    create_portfolio,
+    delete_portfolio,
+    delete_position,
+    load_portfolios,
+    set_active_portfolio,
+    upsert_position,
+)
 from .watchlist import add_user_watch, load_user_watchlist, load_watchlist, remove_user_watch
 
 
@@ -170,6 +178,13 @@ def _num(value: Any) -> int:
         return 0
 
 
+def _float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _estimate_missing_usage(entry: dict[str, Any]) -> dict[str, int]:
     prompt_payload = {
         "candidates": entry.get("candidates", []),
@@ -302,6 +317,8 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "count": len(items), "items": [item.__dict__ for item in items]})
             elif path == "/api/my-watchlist":
                 self._send_json(self._my_watchlist_payload())
+            elif path == "/api/portfolios":
+                self._send_json(self._portfolio_payload())
             elif path == "/api/decisions":
                 page = self._query_int(query, "page", 1)
                 page_size = self._query_int(query, "page_size", self._query_int(query, "limit", 20))
@@ -357,8 +374,8 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 notes = payload.get("notes") or []
                 if not isinstance(notes, list):
                     raise ValueError("notes must be a list")
-                result = AutoTrader(self.config).run_once(execute=execute, notes=[str(note) for note in notes])
-                self._send_json(result.__dict__)
+                result = AutoTrader(self.config).run_portfolios_once(execute=execute, notes=[str(note) for note in notes])
+                self._send_json(result)
             elif path == "/api/ai/chat":
                 messages = payload.get("messages") or []
                 if not isinstance(messages, list):
@@ -369,8 +386,31 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     messages=messages,
                     use_news=bool(payload.get("use_news", True)),
                     use_web=bool(payload.get("use_web", False)),
+                    portfolio_id=str(payload.get("portfolio_id", "")).strip() or None,
                 )
                 self._send_json(result)
+            elif path == "/api/portfolios/create":
+                store = create_portfolio(
+                    str(payload.get("name", "")).strip(),
+                    base_currency=str(payload.get("base_currency", "HKD")),
+                    cash=_float(payload.get("cash", 0)),
+                )
+                self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/delete":
+                store = delete_portfolio(str(payload.get("portfolio_id", "")).strip())
+                self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/active":
+                store = set_active_portfolio(str(payload.get("portfolio_id", "")).strip())
+                self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/position":
+                store = upsert_position(str(payload.get("portfolio_id", "")).strip() or None, payload.get("position", payload))
+                self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/position/delete":
+                store = delete_position(
+                    str(payload.get("portfolio_id", "")).strip() or None,
+                    str(payload.get("code", "")).strip(),
+                )
+                self._send_json(self._portfolio_payload(store))
             elif path == "/api/my-watchlist/add":
                 code = str(payload.get("code", "")).strip().upper()
                 if not code:
@@ -414,6 +454,77 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             "count": len(items),
             "items": [item.__dict__ for item in items],
             "quotes": quote_rows,
+            "quote_error": quote_error,
+        }
+
+    def _quote_map(self, codes: list[str]) -> tuple[dict[str, dict[str, Any]], str]:
+        normalized_codes = sorted({str(code or "").strip().upper() for code in codes if str(code or "").strip()})
+        if not normalized_codes:
+            return {}, ""
+        try:
+            with socket.create_connection((self.config.opend_host, self.config.opend_port), timeout=1.2):
+                pass
+        except OSError as exc:
+            return {}, f"OpenD unavailable: {exc}"
+
+        payload = self.client.snapshot(normalized_codes)
+        if not payload.get("ok"):
+            return {}, str(payload.get("data") or payload.get("error") or "quote request failed")
+        return {str(row.get("code", "")).upper(): row for row in payload.get("data") or [] if isinstance(row, dict)}, ""
+
+    def _portfolio_payload(self, store: dict[str, Any] | None = None) -> dict[str, Any]:
+        store = store or load_portfolios()
+        codes = sorted(
+            {
+                str(position.get("code", "")).upper()
+                for portfolio in store.get("portfolios", [])
+                for position in portfolio.get("positions", [])
+                if position.get("code")
+            }
+        )
+        quote_by_code, quote_error = self._quote_map(codes)
+        portfolios: list[dict[str, Any]] = []
+        for portfolio in store.get("portfolios", []):
+            portfolio_row = dict(portfolio)
+            enriched_positions: list[dict[str, Any]] = []
+            totals: dict[str, dict[str, float]] = {}
+            for position in portfolio.get("positions", []):
+                row = dict(position)
+                quote = dict(quote_by_code.get(str(row.get("code", "")).upper(), {}))
+                qty = _float(row.get("qty"))
+                cost_price = _float(row.get("cost_price"))
+                last_price = _float(quote.get("last_price") or quote.get("nominal_price") or quote.get("bid_price"))
+                currency = str(row.get("currency") or portfolio.get("base_currency") or "USD").upper()
+                cost_value = qty * cost_price
+                market_value = qty * last_price if last_price > 0 else 0.0
+                pl_value = market_value - cost_value if last_price > 0 else 0.0
+                row["quote"] = quote
+                row["last_price"] = last_price if last_price > 0 else None
+                row["price_source"] = "Futu OpenD snapshot" if last_price > 0 else ""
+                row["cost_value"] = round(cost_value, 4)
+                row["market_value"] = round(market_value, 4) if last_price > 0 else None
+                row["pl_value"] = round(pl_value, 4) if last_price > 0 else None
+                row["pl_ratio"] = round(pl_value / cost_value * 100, 4) if last_price > 0 and cost_value > 0 else None
+                enriched_positions.append(row)
+
+                bucket = totals.setdefault(currency, {"cost_value": 0.0, "market_value": 0.0, "pl_value": 0.0})
+                bucket["cost_value"] += cost_value
+                if last_price > 0:
+                    bucket["market_value"] += market_value
+                    bucket["pl_value"] += pl_value
+
+            portfolio_row["positions"] = enriched_positions
+            portfolio_row["position_count"] = len(enriched_positions)
+            portfolio_row["totals_by_currency"] = {
+                currency: {key: round(value, 4) for key, value in values.items()}
+                for currency, values in totals.items()
+            }
+            portfolios.append(portfolio_row)
+
+        return {
+            "ok": not quote_error,
+            "active_id": store.get("active_id"),
+            "portfolios": portfolios,
             "quote_error": quote_error,
         }
 

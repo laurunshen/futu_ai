@@ -129,9 +129,9 @@ def cmd_news_signals(args: argparse.Namespace) -> int:
 def cmd_ai_once(args: argparse.Namespace) -> int:
     config = AppConfig.from_env()
     execute = False if args.dry_run else args.execute or (config.gemini.auto_enabled and config.gemini.auto_execute)
-    result = AutoTrader(config).run_once(execute=execute, notes=args.note or [])
-    _print_json(result.__dict__)
-    return 0 if result.ok else 2
+    result = AutoTrader(config).run_portfolios_once(execute=execute, notes=args.note or [])
+    _print_json(result)
+    return 0 if result.get("ok") else 2
 
 
 def cmd_ai_loop(args: argparse.Namespace) -> int:

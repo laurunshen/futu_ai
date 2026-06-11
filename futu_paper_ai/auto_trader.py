@@ -13,6 +13,7 @@ from .futu_client import FutuPaperClient
 from .gemini_engine import GeminiDecisionEngine, GeminiTradeDecision
 from .models import OrderIntent, infer_market
 from .news_signals import load_news_signals
+from .portfolios import load_portfolios
 from .watchlist import WatchItem, load_watchlist
 
 
@@ -32,6 +33,8 @@ class AutoTradeResult:
     execution: dict[str, Any] | None
     blocked_reasons: list[str]
     log_path: str
+    source: str = "futu_simulate"
+    portfolio: dict[str, Any] | None = None
 
 
 def _clean(value: Any) -> Any:
@@ -110,6 +113,104 @@ class AutoTrader:
         log_path = self._append_log(result)
         return AutoTradeResult(**{**asdict(result), "log_path": str(log_path)})
 
+    def run_portfolios_once(self, execute: bool | None = None, notes: list[str] | None = None) -> dict[str, Any]:
+        store = load_portfolios()
+        results = []
+        for portfolio in store.get("portfolios", []):
+            results.append(self._run_for_portfolio(portfolio, notes=notes or []))
+        return {
+            "ok": all(result.ok for result in results) if results else True,
+            "mode": "portfolio_multi_decision",
+            "count": len(results),
+            "execute_requested": bool(execute),
+            "results": [_clean(asdict(result)) for result in results],
+        }
+
+    def _run_for_portfolio(self, portfolio: dict[str, Any], notes: list[str]) -> AutoTradeResult:
+        positions_raw = [dict(position) for position in portfolio.get("positions", []) if isinstance(position, dict)]
+        portfolio_codes = [str(position.get("code", "")).upper() for position in positions_raw if position.get("code")]
+        watchlist = self._watchlist_with_portfolio_codes(portfolio_codes, positions_raw)
+        snapshots = self._snapshot_watchlist(watchlist)
+        watch_codes = [item.code for item in watchlist]
+        priority_scores = {code: 1500.0 for code in portfolio_codes}
+        candidates = self._select_candidates(
+            snapshots,
+            limit=max(self.config.gemini.candidate_count, min(len(portfolio_codes) + 3, 12)),
+            priority_scores=priority_scores,
+        )
+        snapshot_by_code = {str(row.get("code", "")).upper(): row for row in snapshots}
+        positions = self._enrich_portfolio_positions(positions_raw, snapshot_by_code)
+        account = {
+            "type": "local_portfolio",
+            "id": portfolio.get("id"),
+            "name": portfolio.get("name"),
+            "base_currency": portfolio.get("base_currency"),
+            "cash": portfolio.get("cash", 0),
+            "position_count": len(positions),
+            "price_rule": "Current prices are only from Futu OpenD snapshots attached to positions/candidates.",
+        }
+        news_payload = load_news_signals(
+            self.config.news,
+            focus_codes=watch_codes,
+            candidate_codes=[str(candidate.get("code")) for candidate in candidates],
+        )
+        news_boosts = self._news_candidate_boosts(news_payload, watch_codes)
+        if news_boosts:
+            for code in portfolio_codes:
+                news_boosts[code] = max(news_boosts.get(code, 0), 1500.0)
+            candidates = self._select_candidates(
+                snapshots,
+                limit=max(self.config.gemini.candidate_count, min(len(portfolio_codes) + 3, 12)),
+                priority_scores=news_boosts,
+            )
+            news_payload = load_news_signals(
+                self.config.news,
+                focus_codes=watch_codes,
+                candidate_codes=[str(candidate.get("code")) for candidate in candidates],
+            )
+
+        news_notes = [str(note) for note in notes]
+        if news_payload.get("ok"):
+            news_notes.extend(str(note) for note in news_payload.get("notes") or [])
+        news_notes.append(
+            "本轮是本地模拟盘决策，不会自动修改本地持仓，也不会提交富途订单。"
+        )
+
+        decision = self.engine.decide(candidates=candidates, positions=positions, account=account, notes=news_notes)
+        order, blocked = self._build_order(decision, positions)
+        execution = None
+        if order:
+            execution = {
+                "ok": True,
+                "mode": "portfolio_suggestion",
+                "message": "Local portfolio decision only; no Futu order submitted.",
+                "intent": order.to_dict(),
+            }
+
+        result = AutoTradeResult(
+            ok=not blocked,
+            mode="portfolio_decision",
+            decision=decision.to_dict(),
+            gemini_usage=self.engine.last_usage,
+            news_notes=news_notes,
+            news_signals=[dict(signal) for signal in (news_payload.get("signals") or [])],
+            candidates=candidates,
+            order=order.to_dict() if order else None,
+            execution=execution,
+            blocked_reasons=blocked,
+            log_path="",
+            source="local_portfolio",
+            portfolio={
+                "id": portfolio.get("id"),
+                "name": portfolio.get("name"),
+                "base_currency": portfolio.get("base_currency"),
+                "cash": portfolio.get("cash", 0),
+                "position_count": len(positions),
+            },
+        )
+        log_path = self._append_log(result)
+        return AutoTradeResult(**{**asdict(result), "log_path": str(log_path)})
+
     def loop(self, execute: bool | None = None) -> None:
         interval = max(30, self.config.gemini.loop_interval_seconds)
         print(f"Gemini auto loop started. interval={interval}s execute={execute}")
@@ -119,8 +220,8 @@ class AutoTrader:
                 self.client = FutuPaperClient(self.config)
                 self.engine = GeminiDecisionEngine(self.config.gemini)
                 interval = max(30, self.config.gemini.loop_interval_seconds)
-                result = self.run_once(execute=execute)
-                print(json.dumps(_clean(asdict(result)), ensure_ascii=False, default=str))
+                result = self.run_portfolios_once(execute=execute)
+                print(json.dumps(_clean(result), ensure_ascii=False, default=str))
             except Exception as exc:
                 print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
             time.sleep(interval)
@@ -141,6 +242,53 @@ class AutoTrader:
                 if single.get("ok"):
                     rows.extend(self._attach_watch_metadata(single.get("data", []), code_to_item))
         return rows
+
+    def _watchlist_with_portfolio_codes(
+        self, portfolio_codes: list[str], positions: list[dict[str, Any]]
+    ) -> list[WatchItem]:
+        items = load_watchlist(markets=self.config.gemini.observe_markets)
+        by_code = {item.code: item for item in items}
+        position_by_code = {str(position.get("code", "")).upper(): position for position in positions}
+        for code in portfolio_codes:
+            if code in by_code:
+                continue
+            try:
+                market = infer_market(code)
+            except ValueError:
+                continue
+            if market not in self.config.gemini.observe_markets:
+                continue
+            position = position_by_code.get(code, {})
+            by_code[code] = WatchItem(
+                code=code,
+                name=str(position.get("name") or code),
+                sector=str(position.get("note") or "Portfolio"),
+                market=market,
+            )
+        return sorted(by_code.values(), key=lambda item: item.code)
+
+    def _enrich_portfolio_positions(
+        self, positions: list[dict[str, Any]], snapshot_by_code: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        enriched = []
+        for position in positions:
+            row = dict(position)
+            code = str(row.get("code", "")).upper()
+            snapshot = snapshot_by_code.get(code, {})
+            last_price = self._num(snapshot.get("last_price") or snapshot.get("bid_price") or snapshot.get("ask_price"))
+            qty = self._num(row.get("qty"))
+            cost_price = self._num(row.get("cost_price"))
+            cost_value = qty * cost_price
+            row["last_price"] = last_price if last_price > 0 else None
+            row["price_source"] = "Futu OpenD snapshot" if last_price > 0 else ""
+            row["quote_update_time"] = snapshot.get("update_time")
+            row["bid_price"] = self._num(snapshot.get("bid_price")) or None
+            row["ask_price"] = self._num(snapshot.get("ask_price")) or None
+            row["market_value"] = round(qty * last_price, 4) if last_price > 0 else None
+            row["pl_value"] = round(qty * last_price - cost_value, 4) if last_price > 0 else None
+            row["pl_ratio"] = round((last_price - cost_price) / cost_price * 100, 4) if last_price > 0 and cost_price > 0 else None
+            enriched.append(_clean(row))
+        return enriched
 
     def _attach_watch_metadata(
         self, rows: list[dict[str, Any]], code_to_item: dict[str, WatchItem]

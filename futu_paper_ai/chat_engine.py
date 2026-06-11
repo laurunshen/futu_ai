@@ -8,6 +8,7 @@ from typing import Any
 from .config import AppConfig
 from .futu_client import FutuPaperClient
 from .news_signals import normalize_ticker, search_news_signals
+from .portfolios import portfolio_context
 
 
 COMMON_ALIASES = {
@@ -112,21 +113,27 @@ def _extract_codes(text: str) -> list[str]:
     return sorted(normalized)
 
 
-def _load_trading_context(config: AppConfig, query: str) -> dict[str, Any]:
-    requested_codes = _extract_codes(query)
+def _load_trading_context(config: AppConfig, query: str, portfolio_id: str | None = None) -> dict[str, Any]:
+    portfolio_payload = portfolio_context(portfolio_id)
+    portfolio_positions = portfolio_payload.get("positions", [])
+    portfolio_codes = [str(position.get("code", "")).upper() for position in portfolio_positions if position.get("code")]
+    requested_codes = sorted(set(_extract_codes(query)) | set(portfolio_codes))
     try:
         with socket.create_connection((config.opend_host, config.opend_port), timeout=1.2):
             pass
     except OSError as exc:
         return {
             "requested_codes": requested_codes,
-            "positions": [],
+            "active_portfolio": portfolio_payload.get("portfolio", {}),
+            "portfolio_positions": portfolio_positions,
+            "futu_positions": [],
             "quotes": [],
+            "price_rule": "当前价只能来自 Futu OpenD quotes；OpenD 不可用时必须说当前价缺失。",
             "errors": [f"opend:{config.opend_host}:{config.opend_port}:{exc}"],
         }
 
     client = FutuPaperClient(config)
-    positions: list[dict[str, Any]] = []
+    futu_positions: list[dict[str, Any]] = []
     errors: list[str] = []
     markets = sorted((config.gemini.observe_markets or config.risk.allowed_markets) & {"US", "HK", "CN"})
     if not markets:
@@ -145,10 +152,10 @@ def _load_trading_context(config: AppConfig, query: str) -> dict[str, Any]:
             if isinstance(row, dict):
                 compact = _compact_row(row, POSITION_FIELDS)
                 compact["market"] = market
-                positions.append(compact)
+                futu_positions.append(compact)
 
-    position_codes = [str(row.get("code", "")).upper() for row in positions if row.get("code")]
-    quote_codes = sorted(set(requested_codes) | set(position_codes))[:24]
+    futu_position_codes = [str(row.get("code", "")).upper() for row in futu_positions if row.get("code")]
+    quote_codes = sorted(set(requested_codes) | set(futu_position_codes))[:24]
     quotes: list[dict[str, Any]] = []
     if quote_codes:
         try:
@@ -167,8 +174,11 @@ def _load_trading_context(config: AppConfig, query: str) -> dict[str, Any]:
 
     return {
         "requested_codes": requested_codes,
-        "positions": positions[:24],
+        "active_portfolio": portfolio_payload.get("portfolio", {}),
+        "portfolio_positions": portfolio_positions[:24],
+        "futu_positions": futu_positions[:24],
         "quotes": quotes[:24],
+        "price_rule": "当前价唯一可信来源是 Futu OpenD quotes 中的 last_price/bid_price/ask_price/update_time；联网检索价格只能当背景，不能当当前价。",
         "errors": errors[-6:],
     }
 
@@ -190,7 +200,9 @@ def _build_prompt(
         "- 用中文，语气直接、清楚、适合新手。\n"
         "- 只能把 BUY / SELL / HOLD 当作模拟盘讨论倾向，不要暗示真实资金必然操作。\n"
         "- 如果用户给了持仓、成本价、买入价、亏损、盈利、时间周期或风险偏好，必须在回答中逐项使用这些信息。\n"
-        "- 如果本地持仓/行情上下文里有对应标的，必须优先使用这些数据；如果没有当前价，就明确说缺少当前价，不要编造。\n"
+        "- 如果本地模拟盘里有持仓，必须优先使用 active_portfolio 和 portfolio_positions 作为用户真实持仓上下文。\n"
+        "- 当前价格只能来自本地持仓/行情上下文里的 quotes.last_price、quotes.bid_price、quotes.ask_price 和 quotes.update_time。\n"
+        "- 联网检索、新闻、网页摘要里的价格只能当背景，不能当作当前价；如果 quotes 没有对应标的，就明确说当前价缺失，不要编造或用网页价格替代。\n"
         "- 如果能得到当前价和成本价，必须计算大概浮动盈亏百分比；公式写清楚，结果可以取近似值。\n"
         "- 证据不足时优先 HOLD，并告诉用户还缺什么信息。\n"
         "- 不要编造财报、价格、新闻或公司事件；没有信息就明确说没有。\n"
@@ -232,6 +244,7 @@ def run_ai_chat(
     messages: Any,
     use_news: bool = True,
     use_web: bool = False,
+    portfolio_id: str | None = None,
 ) -> dict[str, Any]:
     clean_messages = _clean_messages(messages)
     topic = str(topic or "").strip()[:200]
@@ -258,7 +271,7 @@ def run_ai_chat(
     news_payload: dict[str, Any] = {"ok": True, "enabled": False, "signals": [], "notes": []}
     if use_news:
         news_payload = search_news_signals(config.news, query, limit=8)
-    trading_context = _load_trading_context(config, query)
+    trading_context = _load_trading_context(config, query, portfolio_id)
 
     try:
         from google import genai
