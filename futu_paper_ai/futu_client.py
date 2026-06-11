@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import socket
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
 from .config import AppConfig, PROJECT_ROOT
 from .models import OrderIntent
+from .portfolios import DEFAULT_FX_TO_HKD
 from .risk import RiskDecision, RiskEngine
 
 
@@ -32,6 +35,28 @@ def _records(data: Any) -> Any:
     if hasattr(data, "to_dict"):
         return data.to_dict(orient="records")
     return data
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+        if number != number:
+            return default
+        return number
+    except (TypeError, ValueError):
+        return default
+
+
+def _quote_price(row: dict[str, Any]) -> float:
+    bid = _float(row.get("bid_price"), 0)
+    ask = _float(row.get("ask_price"), 0)
+    if bid > 0 and ask > 0:
+        return (bid + ask) / 2
+    for key in ("last_price", "nominal_price", "open_price", "prev_close_price"):
+        price = _float(row.get(key), 0)
+        if price > 0:
+            return price
+    return 0.0
 
 
 class FutuPaperClient:
@@ -73,6 +98,113 @@ class FutuPaperClient:
         with self.quote_context() as ctx:
             ret, data = ctx.get_market_snapshot([code.upper() for code in codes])
         return {"ok": ret == futu.RET_OK, "data": _records(data)}
+
+    def fx_rates_to_hkd(self) -> dict[str, Any]:
+        """Best-effort broker FX feed.
+
+        Futu's SDK exposes an FX quote market, but some OpenD/account setups return
+        "unsupported quote market". Keep the call path in place so a future OpenD
+        or permission change starts using live FX without another app change.
+        """
+        futu = _load_futu(self.config.use_system_home)
+        defaults = dict(DEFAULT_FX_TO_HKD)
+        codes = [
+            "FX.USDHKD",
+            "FX.HKDUSD",
+            "FX.CNHHKD",
+            "FX.HKDCNH",
+            "FX.CNYHKD",
+            "FX.HKDCNY",
+            "FX.USDCNH",
+            "FX.CNHUSD",
+            "FX.USDCNY",
+            "FX.CNYUSD",
+        ]
+        payload: dict[str, Any] = {
+            "ok": False,
+            "source": "local_default_fx_to_hkd",
+            "fx_to_hkd": defaults,
+            "attempted_codes": codes,
+            "quotes": [],
+            "error": "",
+            "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        try:
+            with socket.create_connection((self.config.opend_host, self.config.opend_port), timeout=1.2):
+                pass
+        except OSError as exc:
+            payload["error"] = f"OpenD unavailable: {exc}"
+            return payload
+
+        try:
+            with self.quote_context() as ctx:
+                ret, data = ctx.get_market_snapshot(codes)
+        except Exception as exc:
+            payload["error"] = str(exc)
+            return payload
+
+        if ret != futu.RET_OK:
+            payload["error"] = str(data)
+            return payload
+
+        rows = _records(data)
+        if not isinstance(rows, list):
+            payload["error"] = "Futu FX snapshot returned an unexpected payload."
+            return payload
+
+        rates = dict(defaults)
+        live_pairs: dict[str, float] = {}
+        quote_rows: list[dict[str, Any]] = []
+        for raw_row in rows:
+            if not isinstance(raw_row, dict):
+                continue
+            code = str(raw_row.get("code") or "").upper()
+            price = _quote_price(raw_row)
+            quote_rows.append(
+                {
+                    "code": code,
+                    "name": raw_row.get("name"),
+                    "update_time": raw_row.get("update_time"),
+                    "price": round(price, 8) if price > 0 else None,
+                }
+            )
+            if "." not in code or price <= 0:
+                continue
+            pair = code.split(".", 1)[1].replace("/", "").upper()
+            if len(pair) != 6:
+                continue
+            base, quote = pair[:3], pair[3:]
+            if base == "USD" and quote == "HKD":
+                rates["USD"] = price
+                live_pairs["USDHKD"] = price
+            elif base == "HKD" and quote == "USD":
+                rates["USD"] = 1 / price
+                live_pairs["HKDUSD"] = price
+            elif base in {"CNH", "CNY"} and quote == "HKD":
+                rates["CNH"] = price
+                rates["CNY"] = price
+                live_pairs[f"{base}HKD"] = price
+            elif base == "HKD" and quote in {"CNH", "CNY"}:
+                rates["CNH"] = 1 / price
+                rates["CNY"] = 1 / price
+                live_pairs[f"HKD{quote}"] = price
+
+        if not live_pairs:
+            payload["quotes"] = quote_rows
+            payload["error"] = "Futu FX snapshot returned no usable HKD cross rates."
+            return payload
+
+        payload.update(
+            {
+                "ok": True,
+                "source": "futu_opend_fx_snapshot",
+                "fx_to_hkd": {currency: round(value, 6) for currency, value in sorted(rates.items())},
+                "quotes": quote_rows,
+                "live_pairs": live_pairs,
+                "error": "",
+            }
+        )
+        return payload
 
     def account(self, market: str, currency: str) -> dict[str, Any]:
         futu = _load_futu(self.config.use_system_home)

@@ -460,7 +460,13 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
   const totals = Object.entries(portfolio.totals_by_currency || {});
   const cashByCurrency = portfolio.cash_by_currency || {};
   const cashRows = Object.entries(cashByCurrency);
-  const cashCurrencies = Array.from(new Set([portfolio.base_currency, ...Object.keys(cashByCurrency), "HKD", "USD", "CNY"].filter(Boolean)));
+  const fxRates = portfolio.fx_to_hkd || {};
+  const fxRateText = Object.entries(fxRates)
+    .filter(([currency]) => currency !== "HKD")
+    .map(([currency, value]) => `${currency}=${fmt(value)}`)
+    .join(" · ");
+  const fxLabel = portfolio.fx_ok ? "Futu OpenD FX" : "默认FX";
+  const cashCurrencies = Array.from(new Set([portfolio.base_currency, ...Object.keys(cashByCurrency), "HKD", "USD", "CNY", "CNH"].filter(Boolean)));
   const selectedCashCurrency = portfolio.base_currency || cashCurrencies[0] || "HKD";
   const cashCards = cashRows.length
     ? cashRows
@@ -498,6 +504,11 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     <div class="metric-grid">
       ${cashCards}
       ${totalCards}
+    </div>
+    <div class="portfolio-fx-strip ${portfolio.fx_ok ? "live" : "fallback"}">
+      <span>${html(fxLabel)}</span>
+      <strong>${html(fxRateText || "HKD=1")}</strong>
+      ${portfolio.fx_error ? `<small>${html(portfolio.fx_error)}</small>` : ""}
     </div>
     <div class="portfolio-cash-editor">
       <label>
@@ -1241,7 +1252,7 @@ function renderDecisionDetail(row) {
         ["消息", application?.message],
         ["流水", application?.trade ? `${application.trade.side} ${application.trade.qty} ${application.trade.code} @ ${application.trade.price}` : ""],
         ["现金变动", renderCashEffects(application?.trade?.cash_effects)],
-        ["换汇", application?.trade?.fx?.source_amount ? `${application.trade.fx.source_amount} ${application.trade.fx.source_currency} -> ${application.trade.fx.target_amount} ${application.trade.fx.target_currency}` : ""],
+        ["换汇", application?.trade?.fx?.source_amount ? `${application.trade.fx.source_amount} ${application.trade.fx.source_currency} -> ${application.trade.fx.target_amount} ${application.trade.fx.target_currency} · ${application.trade.fx.source || ""}` : ""],
       ])
     )}
     ${canApplyDecision ? `<button type="button" class="primary-wide decision-apply-button" id="applyDecisionToPortfolio">应用到模拟盘</button>` : ""}
@@ -1251,6 +1262,7 @@ function renderDecisionDetail(row) {
         ["名称", portfolio.name],
         ["币种", portfolio.base_currency],
         ["现金", portfolio.cash],
+        ["FX", portfolio.fx_source || ""],
         ["持仓数", portfolio.position_count],
       ])
     ) : ""}

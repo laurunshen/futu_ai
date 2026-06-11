@@ -417,6 +417,40 @@ textarea {
   color: var(--red);
 }
 
+.portfolio-fx-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.portfolio-fx-strip span {
+  font-weight: 760;
+}
+
+.portfolio-fx-strip strong {
+  color: var(--ink);
+}
+
+.portfolio-fx-strip small {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+
+.portfolio-fx-strip.live span {
+  color: var(--green);
+}
+
+.portfolio-fx-strip.fallback span {
+  color: var(--amber);
+}
+
 .portfolio-cash-editor {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

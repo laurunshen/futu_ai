@@ -312,6 +312,7 @@ data/decisions/                  决策日志，忽略提交
 - `observe` 模式：只记录建议，不应用。
 - 本地应用只修改本地 `data/state/portfolios.json`，不会提交富途订单。
 - 当前买卖维护多币种现金桶 `cash_by_currency`；买入时优先扣交易币种现金，不足部分可按 `fx_to_hkd` 从基础币种现金自动换汇扣款。
+- 2026-06-11 15:07 已加入 FX 来源追踪：系统优先尝试富途 OpenD FX 快照；服务器实测 `FX.USDHKD` / `FX.USDCNH` 返回“不支持的行情市场”，底层 `SecurityType_Forex` 静态列表为空，因此当前会回退到本地默认 HKD 汇率表，并在前端、AI 决策上下文和成交流水里标记 `local_default_fx_to_hkd`。
 
 后续仍需增加：
 

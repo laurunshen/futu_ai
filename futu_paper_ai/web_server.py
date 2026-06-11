@@ -367,6 +367,8 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             elif path == "/api/positions":
                 market = self._query_one(query, "market", "US").upper()
                 self._send_json(self.client.positions(market))
+            elif path == "/api/fx-rates":
+                self._send_json(self.client.fx_rates_to_hkd())
             elif path == "/api/config":
                 self._send_json({"ok": True, "config": public_config(self.config)})
             elif path == "/api/watchlist":
@@ -510,12 +512,16 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 if not portfolio_id:
                     raise ValueError("portfolio_id is required")
                 decision = entry.get("decision") if isinstance(entry.get("decision"), dict) else {}
+                fx_payload = self.client.fx_rates_to_hkd()
                 application = apply_order_to_portfolio(
                     portfolio_id,
                     order,
                     source="manual",
                     decision_id=decision_id,
                     reason=str(decision.get("reason") or order.get("reason") or ""),
+                    fx_to_hkd=fx_payload.get("fx_to_hkd"),
+                    fx_source=str(fx_payload.get("source") or ""),
+                    fx_status=fx_payload,
                 )
                 _mark_decision_application(decision_id, application)
                 self._send_json({"ok": bool(application.get("ok", True)), "application": application, "portfolio_payload": self._portfolio_payload()})
@@ -582,6 +588,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
 
     def _portfolio_payload(self, store: dict[str, Any] | None = None) -> dict[str, Any]:
         store = store or load_portfolios()
+        fx_payload = self.client.fx_rates_to_hkd()
         codes = sorted(
             {
                 str(position.get("code", "")).upper()
@@ -594,6 +601,11 @@ class PaperWebHandler(BaseHTTPRequestHandler):
         portfolios: list[dict[str, Any]] = []
         for portfolio in store.get("portfolios", []):
             portfolio_row = dict(portfolio)
+            portfolio_row["fx_to_hkd"] = fx_payload.get("fx_to_hkd") or portfolio.get("fx_to_hkd", {})
+            portfolio_row["fx_source"] = fx_payload.get("source")
+            portfolio_row["fx_ok"] = bool(fx_payload.get("ok"))
+            portfolio_row["fx_error"] = fx_payload.get("error")
+            portfolio_row["fx_updated_at"] = fx_payload.get("updated_at")
             enriched_positions: list[dict[str, Any]] = []
             totals: dict[str, dict[str, float]] = {}
             for position in portfolio.get("positions", []):
@@ -634,6 +646,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             "active_id": store.get("active_id"),
             "portfolios": portfolios,
             "quote_error": quote_error,
+            "fx": fx_payload,
         }
 
     def _serve_static(self, path: str, head_only: bool = False) -> None:

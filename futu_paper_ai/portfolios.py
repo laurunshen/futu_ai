@@ -13,7 +13,7 @@ from .news_signals import normalize_ticker
 PORTFOLIOS_PATH = STATE_ROOT / "portfolios.json"
 DEFAULT_PORTFOLIO_ID = "default"
 APPLY_MODES = {"observe", "manual", "auto"}
-DEFAULT_FX_TO_HKD = {"HKD": 1.0, "USD": 7.8, "CNY": 1.08}
+DEFAULT_FX_TO_HKD = {"HKD": 1.0, "USD": 7.8, "CNY": 1.08, "CNH": 1.08}
 
 
 def _now() -> str:
@@ -186,6 +186,8 @@ def _normalize_portfolio(payload: dict[str, Any]) -> dict[str, Any]:
         "cash": round(cash_by_currency.get(base_currency, 0.0), 4),
         "cash_by_currency": {currency: round(value, 4) for currency, value in sorted(cash_by_currency.items())},
         "fx_to_hkd": {currency: round(value, 6) for currency, value in sorted(_fx_rates_to_hkd(payload).items())},
+        "fx_source": str(payload.get("fx_source") or "local_default_fx_to_hkd"),
+        "fx_status": dict(payload.get("fx_status") or {}),
         "apply_mode": _normalize_apply_mode(payload.get("apply_mode")),
         "futu_sync_enabled": bool(payload.get("futu_sync_enabled", False)),
         "parent_id": str(payload.get("parent_id") or ""),
@@ -396,6 +398,9 @@ def apply_order_to_portfolio(
     source: str = "manual",
     decision_id: str = "",
     reason: str = "",
+    fx_to_hkd: dict[str, Any] | None = None,
+    fx_source: str = "",
+    fx_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     intent = OrderIntent.from_dict(order_payload)
     store = load_portfolios()
@@ -416,7 +421,13 @@ def apply_order_to_portfolio(
 
         currency = _currency_for_market(intent.market)
         base_currency = str(portfolio.get("base_currency") or "HKD").upper()
-        fx_rates = _fx_rates_to_hkd(portfolio)
+        fx_payload = dict(portfolio)
+        if fx_to_hkd:
+            merged_rates = dict(portfolio.get("fx_to_hkd") or {})
+            merged_rates.update(fx_to_hkd)
+            fx_payload["fx_to_hkd"] = merged_rates
+        fx_rates = _fx_rates_to_hkd(fx_payload)
+        fx_source_name = str(fx_source or "local_default_fx_to_hkd")
         cash_by_currency = dict(portfolio.get("cash_by_currency") or {})
         cash_by_currency.setdefault(currency, 0.0)
         positions = [dict(position) for position in portfolio.get("positions", [])]
@@ -459,7 +470,7 @@ def apply_order_to_portfolio(
                     "source_amount": source_amount,
                     "target_amount": remaining_notional,
                     "rate": round(source_amount / remaining_notional, 6),
-                    "source": "local_default_fx_to_hkd",
+                    "source": fx_source_name,
                 }
             if existing:
                 old_qty = _num(existing.get("qty"), 0)
@@ -523,6 +534,15 @@ def apply_order_to_portfolio(
 
         portfolio["cash_by_currency"] = cash_by_currency
         portfolio["cash"] = round(_num(cash_by_currency.get(base_currency), 0), 4)
+        portfolio["fx_to_hkd"] = {currency: round(value, 6) for currency, value in sorted(fx_rates.items())}
+        portfolio["fx_source"] = fx_source_name
+        if fx_status:
+            portfolio["fx_status"] = {
+                "ok": bool(fx_status.get("ok")),
+                "source": str(fx_status.get("source") or fx_source_name),
+                "error": str(fx_status.get("error") or ""),
+                "updated_at": str(fx_status.get("updated_at") or ""),
+            }
         portfolio["positions"] = sorted(positions, key=lambda item: item.get("code", ""))
         portfolio["trades"] = trades[-500:]
         portfolio["updated_at"] = _now()
@@ -534,6 +554,11 @@ def apply_order_to_portfolio(
             "decision_id": decision_id,
             "trade": trade,
             "cash_by_currency": dict(sorted(cash_by_currency.items())),
+            "fx": {
+                "source": fx_source_name,
+                "fx_to_hkd": dict(sorted(fx_rates.items())),
+                "status": dict(fx_status or {}),
+            },
         }
     raise ValueError("portfolio not found")
 

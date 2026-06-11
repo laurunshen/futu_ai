@@ -86,7 +86,10 @@ and `auto` applies risk-approved AI orders to the local portfolio ledger. Local
 applications update `data/state/portfolios.json`, write a trade record, and do
 not submit Futu orders. Local buys use broker-like buying power: they spend the
 trade currency first and can auto-convert base-currency cash using the stored
-FX table when the trade currency balance is insufficient.
+FX table when the trade currency balance is insufficient. The app now probes
+Futu OpenD FX snapshots first; if the current OpenD/account setup does not
+support FX quotes, it falls back to the local HKD table and records that source
+in portfolio payloads and trade logs.
 
 Candidate selection is two-stage:
 

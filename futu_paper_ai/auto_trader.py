@@ -145,6 +145,7 @@ class AutoTrader:
         )
         snapshot_by_code = {str(row.get("code", "")).upper(): row for row in snapshots}
         positions = self._enrich_portfolio_positions(positions_raw, snapshot_by_code)
+        fx_payload = self.client.fx_rates_to_hkd()
         account = {
             "type": "local_portfolio",
             "id": portfolio.get("id"),
@@ -152,8 +153,11 @@ class AutoTrader:
             "base_currency": portfolio.get("base_currency"),
             "cash": portfolio.get("cash", 0),
             "cash_by_currency": portfolio.get("cash_by_currency", {}),
-            "fx_to_hkd": portfolio.get("fx_to_hkd", {}),
-            "buying_power_rule": "Local ledger can auto-convert base currency cash for cross-currency simulated buys.",
+            "fx_to_hkd": fx_payload.get("fx_to_hkd") or portfolio.get("fx_to_hkd", {}),
+            "fx_source": fx_payload.get("source"),
+            "fx_ok": bool(fx_payload.get("ok")),
+            "fx_error": fx_payload.get("error"),
+            "buying_power_rule": "Local ledger can auto-convert base currency cash for cross-currency simulated buys; FX uses Futu OpenD if available, otherwise local defaults are explicitly recorded.",
             "apply_mode": portfolio.get("apply_mode", "manual"),
             "position_count": len(positions),
             "price_rule": "Current prices are only from Futu OpenD snapshots attached to positions/candidates.",
@@ -183,6 +187,10 @@ class AutoTrader:
             news_notes.extend(str(note) for note in news_payload.get("notes") or [])
         apply_mode = str(portfolio.get("apply_mode") or "manual").lower()
         news_notes.append(f"本轮是本地模拟盘决策；当前模拟盘应用模式={apply_mode}；不会提交富途订单。")
+        news_notes.append(
+            f"FX口径：{fx_payload.get('source')}；"
+            f"{'已使用富途OpenD FX快照' if fx_payload.get('ok') else '富途FX不可用，使用本地默认汇率'}。"
+        )
 
         decision = self.engine.decide(candidates=candidates, positions=positions, account=account, notes=news_notes)
         order, blocked = self._build_order(decision, positions)
@@ -201,6 +209,7 @@ class AutoTrader:
             blocked=blocked,
             decision_id=decision_id,
             reason=decision.reason,
+            fx_payload=fx_payload,
         )
 
         result = AutoTradeResult(
@@ -224,7 +233,10 @@ class AutoTrader:
                 "base_currency": portfolio.get("base_currency"),
                 "cash": portfolio.get("cash", 0),
                 "cash_by_currency": portfolio.get("cash_by_currency", {}),
-                "fx_to_hkd": portfolio.get("fx_to_hkd", {}),
+                "fx_to_hkd": fx_payload.get("fx_to_hkd") or portfolio.get("fx_to_hkd", {}),
+                "fx_source": fx_payload.get("source"),
+                "fx_ok": bool(fx_payload.get("ok")),
+                "fx_error": fx_payload.get("error"),
                 "apply_mode": apply_mode,
                 "position_count": len(positions),
             },
@@ -243,6 +255,7 @@ class AutoTrader:
         blocked: list[str],
         decision_id: str,
         reason: str,
+        fx_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         mode = str(portfolio.get("apply_mode") or "manual").strip().lower()
         if mode not in {"observe", "manual", "auto"}:
@@ -277,6 +290,9 @@ class AutoTrader:
                 source="auto",
                 decision_id=decision_id,
                 reason=reason,
+                fx_to_hkd=(fx_payload or {}).get("fx_to_hkd"),
+                fx_source=str((fx_payload or {}).get("source") or ""),
+                fx_status=fx_payload,
             )
         except Exception as exc:
             return {
