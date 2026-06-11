@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import AppConfig, PROJECT_ROOT
+from .market_data import extended_session_from_quote
 from .models import OrderIntent
 from .portfolios import DEFAULT_FX_TO_HKD
 from .risk import RiskDecision, RiskEngine
@@ -97,7 +98,12 @@ class FutuPaperClient:
         futu = _load_futu(self.config.use_system_home)
         with self.quote_context() as ctx:
             ret, data = ctx.get_market_snapshot([code.upper() for code in codes])
-        return {"ok": ret == futu.RET_OK, "data": _records(data)}
+        rows = _records(data)
+        if ret == futu.RET_OK and isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict):
+                    row["extended_session"] = extended_session_from_quote(row)
+        return {"ok": ret == futu.RET_OK, "data": rows}
 
     def fx_rates_to_hkd(self) -> dict[str, Any]:
         """Best-effort broker FX feed.

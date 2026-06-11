@@ -451,6 +451,51 @@ textarea {
   color: var(--amber);
 }
 
+.extended-session-pill {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #eef4f8;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.extended-session-pill.compact {
+  margin-top: 7px;
+  padding: 4px 7px;
+}
+
+.extended-session-pill span {
+  color: #113a63;
+  font-weight: 760;
+}
+
+.extended-session-pill strong {
+  color: var(--ink);
+}
+
+.extended-session-pill em {
+  font-style: normal;
+  font-weight: 760;
+}
+
+.extended-session-pill em.up {
+  color: var(--green);
+}
+
+.extended-session-pill em.down {
+  color: var(--red);
+}
+
+.extended-session-pill small {
+  color: var(--muted);
+}
+
 .portfolio-cash-editor {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

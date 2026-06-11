@@ -12,6 +12,7 @@ from typing import Any
 from .config import AppConfig, PROJECT_ROOT
 from .futu_client import FutuPaperClient
 from .gemini_engine import GeminiDecisionEngine, GeminiTradeDecision
+from .market_data import extended_session_from_quote
 from .models import OrderIntent, infer_market
 from .news_signals import load_news_signals
 from .portfolios import apply_order_to_portfolio, load_portfolios
@@ -376,6 +377,7 @@ class AutoTrader:
             row["quote_update_time"] = snapshot.get("update_time")
             row["bid_price"] = self._num(snapshot.get("bid_price")) or None
             row["ask_price"] = self._num(snapshot.get("ask_price")) or None
+            row["extended_session"] = snapshot.get("extended_session") or extended_session_from_quote(snapshot, row.get("market", ""))
             row["market_value"] = round(qty * last_price, 4) if last_price > 0 else None
             row["pl_value"] = round(qty * last_price - cost_value, 4) if last_price > 0 else None
             row["pl_ratio"] = round((last_price - cost_price) / cost_price * 100, 4) if last_price > 0 and cost_price > 0 else None
@@ -394,6 +396,7 @@ class AutoTrader:
             row["watch_name"] = item.name
             row["watch_sector"] = item.sector
             row["market"] = item.market
+            row["extended_session"] = row.get("extended_session") or extended_session_from_quote(row, item.market)
             enriched.append(_clean(row))
         return enriched
 
@@ -410,6 +413,7 @@ class AutoTrader:
             last_price = self._num(row.get("last_price"))
             prev_close = self._num(row.get("prev_close_price"))
             turnover = self._num(row.get("turnover"))
+            volume = self._num(row.get("volume"))
             amplitude = self._num(row.get("amplitude"))
             volume_ratio = self._num(row.get("volume_ratio"))
             if last_price <= 0 or prev_close <= 0:
@@ -418,6 +422,13 @@ class AutoTrader:
             score = abs(change_pct) * 2.8 + amplitude * 0.8 + max(volume_ratio - 1, 0) * 4
             if turnover > 0:
                 score += min(math.log10(turnover), 12) * 0.35
+            extended = row.get("extended_session") or extended_session_from_quote(row, row.get("market", ""))
+            extended_change = self._num((extended or {}).get("change_rate"))
+            extended_volume = self._num((extended or {}).get("volume"))
+            if extended_change:
+                score += min(abs(extended_change), 8) * 1.2
+            if extended_volume > 0:
+                score += min(math.log10(extended_volume), 8) * 0.18
             news_boost = priority_scores.get(code, 0)
             if news_boost:
                 score += 500 + news_boost * 5
@@ -433,8 +444,12 @@ class AutoTrader:
                     "prev_close_price": prev_close,
                     "change_pct": round(change_pct, 3),
                     "amplitude": amplitude,
+                    "volume": volume,
                     "volume_ratio": volume_ratio,
                     "turnover": turnover,
+                    "extended_session": extended,
+                    "extended_change_pct": round(extended_change, 3) if extended else None,
+                    "extended_price": self._num((extended or {}).get("price")) or None,
                     "lot_size": self._num(row.get("lot_size")) or 1,
                     "score": round(score, 3),
                     "news_boost": round(news_boost, 3),

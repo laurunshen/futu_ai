@@ -89,7 +89,10 @@ trade currency first and can auto-convert base-currency cash using the stored
 FX table when the trade currency balance is insufficient. The app now probes
 Futu OpenD FX snapshots first; if the current OpenD/account setup does not
 support FX quotes, it falls back to the local HKD table and records that source
-in portfolio payloads and trade logs.
+in portfolio payloads and trade logs. US stock snapshots also keep Futu's
+pre-market, after-hours, and overnight fields as `extended_session` sentiment
+signals; regular `last_price` / bid / ask remain the trade and valuation price
+sources.
 
 Candidate selection is two-stage:
 

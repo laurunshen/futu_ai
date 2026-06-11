@@ -48,6 +48,7 @@ QUOTE_FIELDS = (
     "volume",
     "turnover",
     "update_time",
+    "extended_session",
 )
 
 
@@ -178,7 +179,7 @@ def _load_trading_context(config: AppConfig, query: str, portfolio_id: str | Non
         "portfolio_positions": portfolio_positions[:24],
         "futu_positions": futu_positions[:24],
         "quotes": quotes[:24],
-        "price_rule": "当前价唯一可信来源是 Futu OpenD quotes 中的 last_price/bid_price/ask_price/update_time；联网检索价格只能当背景，不能当当前价。",
+        "price_rule": "当前价唯一可信来源是 Futu OpenD quotes 中的 last_price/bid_price/ask_price/update_time；extended_session 只代表美股盘前/盘后/夜盘情绪信号，不能直接当常规成交价；联网检索价格只能当背景，不能当当前价。",
         "errors": errors[-6:],
     }
 
@@ -201,7 +202,8 @@ def _build_prompt(
         "- 只能把 BUY / SELL / HOLD 当作模拟盘讨论倾向，不要暗示真实资金必然操作。\n"
         "- 如果用户给了持仓、成本价、买入价、亏损、盈利、时间周期或风险偏好，必须在回答中逐项使用这些信息。\n"
         "- 如果本地模拟盘里有持仓，必须优先使用 active_portfolio 和 portfolio_positions 作为用户真实持仓上下文。\n"
-        "- 当前价格只能来自本地持仓/行情上下文里的 quotes.last_price、quotes.bid_price、quotes.ask_price 和 quotes.update_time。\n"
+        "- 当前常规价格只能来自本地持仓/行情上下文里的 quotes.last_price、quotes.bid_price、quotes.ask_price 和 quotes.update_time。\n"
+        "- 美股 extended_session 可用于判断盘前/盘后/夜盘情绪和流动性，但必须说明它不是常规时段主成交价。\n"
         "- 联网检索、新闻、网页摘要里的价格只能当背景，不能当作当前价；如果 quotes 没有对应标的，就明确说当前价缺失，不要编造或用网页价格替代。\n"
         "- 如果能得到当前价和成本价，必须计算大概浮动盈亏百分比；公式写清楚，结果可以取近似值。\n"
         "- 证据不足时优先 HOLD，并告诉用户还缺什么信息。\n"

@@ -105,6 +105,33 @@ function changeClass(value) {
   return "flat";
 }
 
+const EXTENDED_SESSION_LABELS = {
+  pre: "盘前",
+  after: "盘后",
+  overnight: "夜盘",
+};
+
+function renderExtendedSessionPill(extendedSession, { compact = false } = {}) {
+  const session = extendedSession || {};
+  const key = session.signal_session;
+  const price = Number(session.price);
+  if (!key || !Number.isFinite(price) || price <= 0) return "";
+  const change = Number(session.change_rate);
+  const cls = changeClass(change);
+  const label = EXTENDED_SESSION_LABELS[key] || key;
+  const changeText = Number.isFinite(change) ? `${change.toFixed(2)}%` : "-";
+  const volume = Number(session.volume);
+  const volumeText = Number.isFinite(volume) && volume > 0 ? `Vol ${fmt(volume)}` : "";
+  return `
+    <div class="extended-session-pill ${compact ? "compact" : ""}">
+      <span>${html(label)}</span>
+      <strong>${html(price)}</strong>
+      <em class="${cls}">${html(changeText)}</em>
+      ${compact || !volumeText ? "" : `<small>${html(volumeText)}</small>`}
+    </div>
+  `;
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,
@@ -291,6 +318,7 @@ function renderQuotes(rows) {
             <span>Ask ${html(row.ask_price)}</span>
             <span>Vol ${html(row.volume)}</span>
           </div>
+          ${renderExtendedSessionPill(row.extended_session)}
         </article>
       `
     )
@@ -330,6 +358,7 @@ function renderMyWatchlist(payload) {
             <span>Bid ${html(row.bid_price)}</span>
             <span>Ask ${html(row.ask_price)}</span>
           </div>
+          ${renderExtendedSessionPill(row.extended_session)}
         </article>
       `;
     })
@@ -578,6 +607,7 @@ function renderPortfolioPositions(portfolio) {
               <small>${html(row.price_source || "无行情")}</small>
             </div>
           </div>
+          ${renderExtendedSessionPill(row.extended_session)}
           <div class="portfolio-position-grid">
             <span>数量 ${html(row.qty)}</span>
             <span>成本 ${html(row.cost_price)} ${html(row.currency)}</span>
@@ -1114,6 +1144,7 @@ function renderDetailCandidates(candidates) {
                 <span>${html(candidate.last_price)}</span>
                 <span>Vol ${html(candidate.volume)}</span>
               </div>
+              ${renderExtendedSessionPill(candidate.extended_session, { compact: true })}
             </article>
           `;
         })

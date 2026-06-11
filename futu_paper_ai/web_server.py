@@ -621,6 +621,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 row["quote"] = quote
                 row["last_price"] = last_price if last_price > 0 else None
                 row["price_source"] = "Futu OpenD snapshot" if last_price > 0 else ""
+                row["extended_session"] = quote.get("extended_session") or {}
                 row["cost_value"] = round(cost_value, 4)
                 row["market_value"] = round(market_value, 4) if last_price > 0 else None
                 row["pl_value"] = round(pl_value, 4) if last_price > 0 else None
