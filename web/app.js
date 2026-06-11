@@ -914,6 +914,7 @@ function renderEvaluation(payload) {
 function renderEvaluationSummary(payload) {
   const target = el("evaluationSummary");
   const metrics = payload.metrics || {};
+  const attribution = payload.attribution || {};
   const metricCards = [
     ["决策样本", metrics.decision_count],
     ["已追踪窗口", metrics.measured_horizons],
@@ -959,7 +960,47 @@ function renderEvaluationSummary(payload) {
     <div class="evaluation-portfolios">
       ${portfolioRows || `<div class="empty">暂无组合估值</div>`}
     </div>
+    ${renderAttributionSummary(attribution)}
     ${payload.quote_error ? `<div class="chat-warning">${html(payload.quote_error)}</div>` : ""}
+  `;
+}
+
+function renderAttributionSummary(attribution) {
+  const rows = Array.isArray(attribution?.sources) ? attribution.sources : [];
+  const totalTrades = Number(attribution?.trade_count || 0);
+  if (!rows.length) {
+    return `
+      <section class="attribution-panel">
+        <div class="attribution-head">
+          <strong>交易归因</strong>
+          <span>暂无交易流水</span>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="attribution-panel">
+      <div class="attribution-head">
+        <strong>交易归因</strong>
+        <span>${html(totalTrades)} 笔 · ${html(fmtHkd(attribution.turnover_hkd || 0))} 成交额 · ${html(fmtHkd(attribution.realized_pnl_hkd || 0))} 已实现</span>
+      </div>
+      <div class="attribution-table">
+        ${rows
+          .map((row) => {
+            const pnl = Number(row.realized_pnl_hkd || 0);
+            return `
+              <div class="attribution-row">
+                <strong>${html(row.label || row.source || "其他来源")}</strong>
+                <span>${html(row.trade_count || 0)} 笔</span>
+                <span>买 ${html(row.buy_count || 0)} / 卖 ${html(row.sell_count || 0)}</span>
+                <span>${html(fmtHkd(row.turnover_hkd || 0))}</span>
+                <span class="${html(changeClass(pnl))}">${html(fmtHkd(pnl))}</span>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    </section>
   `;
 }
 

@@ -13,6 +13,13 @@ from .portfolios import DEFAULT_FX_TO_HKD
 
 FOLLOWUPS_PATH = STATE_ROOT / "decision_followups.json"
 HORIZON_DAYS = (1, 3, 7)
+TRADE_SOURCE_LABELS = {
+    "auto": "AI 自动应用",
+    "manual": "AI 手动应用",
+    "user_trade": "本人交易",
+    "futu_sync": "富途成交回写",
+}
+TRADE_SOURCE_ORDER = ("auto", "manual", "user_trade", "futu_sync")
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -521,22 +528,126 @@ def _decision_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _trade_source_label(source: str) -> str:
+    return TRADE_SOURCE_LABELS.get(str(source or "").lower(), "其他来源")
+
+
+def _new_trade_source_bucket(source: str) -> dict[str, Any]:
+    source_key = str(source or "unknown").lower()
+    return {
+        "source": source_key,
+        "label": _trade_source_label(source_key),
+        "trade_count": 0,
+        "buy_count": 0,
+        "sell_count": 0,
+        "decision_count": 0,
+        "turnover_hkd": 0.0,
+        "realized_pnl_hkd": 0.0,
+        "last_trade_at": "",
+        "_decision_ids": set(),
+    }
+
+
+def _finalize_trade_source_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    decision_ids = bucket.pop("_decision_ids", set())
+    bucket["decision_count"] = len(decision_ids)
+    bucket["turnover_hkd"] = round(_num(bucket.get("turnover_hkd"), 0), 4)
+    bucket["realized_pnl_hkd"] = round(_num(bucket.get("realized_pnl_hkd"), 0), 4)
+    trade_count = int(bucket.get("trade_count") or 0)
+    bucket["avg_turnover_hkd"] = round(bucket["turnover_hkd"] / trade_count, 4) if trade_count else 0.0
+    return bucket
+
+
+def _source_sort_key(row: dict[str, Any]) -> tuple[int, str]:
+    source = str(row.get("source") or "")
+    try:
+        return (TRADE_SOURCE_ORDER.index(source), source)
+    except ValueError:
+        return (len(TRADE_SOURCE_ORDER), source)
+
+
 def _portfolio_trade_stats(portfolio: dict[str, Any], rates: dict[str, float]) -> dict[str, Any]:
     trades = [item for item in portfolio.get("trades") or [] if isinstance(item, dict)]
     by_source: dict[str, int] = {}
+    sources: dict[str, dict[str, Any]] = {}
     realized_pnl_hkd = 0.0
     turnover_hkd = 0.0
     for trade in trades:
-        source = str(trade.get("source") or "unknown")
+        source = str(trade.get("source") or "unknown").lower()
+        side = str(trade.get("side") or "").upper()
         by_source[source] = by_source.get(source, 0) + 1
+        bucket = sources.setdefault(source, _new_trade_source_bucket(source))
         currency = str(trade.get("currency") or _currency_for_code(str(trade.get("code") or ""))).upper()
-        realized_pnl_hkd += _to_hkd(_num(trade.get("realized_pnl"), 0), currency, rates)
-        turnover_hkd += _to_hkd(_num(trade.get("notional"), 0), currency, rates)
+        realized = _to_hkd(_num(trade.get("realized_pnl"), 0), currency, rates)
+        turnover = _to_hkd(_num(trade.get("notional"), 0), currency, rates)
+        realized_pnl_hkd += realized
+        turnover_hkd += turnover
+        bucket["trade_count"] += 1
+        bucket["turnover_hkd"] += turnover
+        bucket["realized_pnl_hkd"] += realized
+        if side == "BUY":
+            bucket["buy_count"] += 1
+        elif side == "SELL":
+            bucket["sell_count"] += 1
+        decision_id = str(trade.get("decision_id") or "").strip()
+        if decision_id:
+            bucket["_decision_ids"].add(decision_id)
+        created_at = str(trade.get("created_at") or "")
+        if created_at and created_at > str(bucket.get("last_trade_at") or ""):
+            bucket["last_trade_at"] = created_at
     return {
         "trade_count": len(trades),
         "by_source": by_source,
+        "sources": sorted((_finalize_trade_source_bucket(bucket) for bucket in sources.values()), key=_source_sort_key),
         "realized_pnl_hkd": round(realized_pnl_hkd, 4),
         "turnover_hkd": round(turnover_hkd, 4),
+    }
+
+
+def _trade_attribution(portfolios: list[dict[str, Any]], rates: dict[str, float]) -> dict[str, Any]:
+    buckets: dict[str, dict[str, Any]] = {}
+    portfolio_ids_by_source: dict[str, set[str]] = {}
+    total_trade_count = 0
+    total_turnover_hkd = 0.0
+    total_realized_pnl_hkd = 0.0
+    for portfolio in portfolios:
+        portfolio_id = str(portfolio.get("id") or "")
+        for trade in [item for item in portfolio.get("trades") or [] if isinstance(item, dict)]:
+            source = str(trade.get("source") or "unknown").lower()
+            side = str(trade.get("side") or "").upper()
+            bucket = buckets.setdefault(source, _new_trade_source_bucket(source))
+            portfolio_ids_by_source.setdefault(source, set()).add(portfolio_id)
+            currency = str(trade.get("currency") or _currency_for_code(str(trade.get("code") or ""))).upper()
+            realized = _to_hkd(_num(trade.get("realized_pnl"), 0), currency, rates)
+            turnover = _to_hkd(_num(trade.get("notional"), 0), currency, rates)
+            total_trade_count += 1
+            total_turnover_hkd += turnover
+            total_realized_pnl_hkd += realized
+            bucket["trade_count"] += 1
+            bucket["turnover_hkd"] += turnover
+            bucket["realized_pnl_hkd"] += realized
+            if side == "BUY":
+                bucket["buy_count"] += 1
+            elif side == "SELL":
+                bucket["sell_count"] += 1
+            decision_id = str(trade.get("decision_id") or "").strip()
+            if decision_id:
+                bucket["_decision_ids"].add(decision_id)
+            created_at = str(trade.get("created_at") or "")
+            if created_at and created_at > str(bucket.get("last_trade_at") or ""):
+                bucket["last_trade_at"] = created_at
+
+    rows = []
+    for source, bucket in buckets.items():
+        row = _finalize_trade_source_bucket(bucket)
+        row["portfolio_count"] = len(portfolio_ids_by_source.get(source, set()))
+        rows.append(row)
+    return {
+        "trade_count": total_trade_count,
+        "source_count": len(rows),
+        "turnover_hkd": round(total_turnover_hkd, 4),
+        "realized_pnl_hkd": round(total_realized_pnl_hkd, 4),
+        "sources": sorted(rows, key=_source_sort_key),
     }
 
 
@@ -651,5 +762,6 @@ def build_evaluation_payload(
         "equity_curves": equity_curves,
         "decision_tracking": tracking_rows,
         "metrics": _decision_metrics(tracking_rows),
+        "attribution": _trade_attribution(filtered_portfolios, rates),
         "followups_updated_at": followups.get("updated_at", ""),
     }

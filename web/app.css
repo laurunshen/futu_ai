@@ -1183,6 +1183,49 @@ tr:last-child td {
   gap: 10px;
 }
 
+.attribution-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.attribution-head,
+.attribution-row {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+}
+
+.attribution-head {
+  grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attribution-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.attribution-table {
+  display: grid;
+  gap: 7px;
+}
+
+.attribution-row {
+  grid-template-columns: minmax(110px, 1.2fr) repeat(4, minmax(70px, 1fr));
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attribution-row strong {
+  color: var(--text);
+  min-width: 0;
+}
+
 .evaluation-portfolio,
 .decision-tracking-item {
   border: 1px solid var(--line);
@@ -1983,6 +2026,14 @@ pre {
 
   .evaluation-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .attribution-head {
+    grid-template-columns: 1fr;
+  }
+
+  .attribution-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .signal-tools {
