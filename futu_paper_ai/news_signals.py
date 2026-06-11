@@ -306,3 +306,111 @@ def format_signal_note(signal: NewsSignal) -> str:
     if signal.summary:
         parts.append(f"summary={signal.summary[:500]}")
     return " | ".join(parts)
+
+
+def search_news_signals(config: NewsConfig, query: str, *, limit: int = 8) -> dict[str, Any]:
+    db_path = Path(config.autonews_db_path).expanduser()
+    if not str(db_path) or not config.autonews_db_path:
+        return {"ok": True, "enabled": False, "signals": [], "notes": [], "message": "AUTONEWS_DB_PATH is not set."}
+    if not db_path.exists():
+        return {"ok": True, "enabled": True, "signals": [], "notes": [], "message": "autoNews signal database does not exist yet."}
+
+    cutoff = datetime.now() - timedelta(hours=max(config.lookback_hours, 1))
+    normalized_code = normalize_ticker(query)
+    terms = [
+        item.lower()
+        for item in re.split(r"[\s,，/|;；]+", str(query or ""))
+        if len(item.strip()) >= 2
+    ]
+    if normalized_code:
+        terms.append(normalized_code.lower())
+
+    try:
+        conn = _connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, url, topic_name, title_cn, summary, so_what, impact_score, tickers,
+                       affected_markets, asset_classes, direction, horizon, confidence, created_at
+                FROM signals
+                WHERE impact_score >= ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(min(config.min_impact, 60), 0), max(limit * 30, 200)),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return {"ok": False, "enabled": True, "signals": [], "notes": [], "error": str(exc)}
+
+    ranked: list[tuple[float, NewsSignal]] = []
+    seen: set[str] = set()
+    for row in rows:
+        created_at = str(row["created_at"] or "")
+        parsed_created_at = _parse_created_at(created_at)
+        if parsed_created_at and parsed_created_at < cutoff:
+            continue
+
+        tickers = _parse_json_list(row["tickers"])
+        signal = NewsSignal(
+            id=int(row["id"] or 0),
+            url=str(row["url"] or ""),
+            topic_name=str(row["topic_name"] or ""),
+            title=str(row["title_cn"] or ""),
+            summary=str(row["summary"] or ""),
+            so_what=str(row["so_what"] or ""),
+            impact_score=int(row["impact_score"] or 0),
+            tickers=tickers,
+            normalized_tickers=[code for code in (normalize_ticker(ticker) for ticker in tickers) if code],
+            affected_markets=_parse_json_list(row["affected_markets"]),
+            asset_classes=_parse_json_list(row["asset_classes"]),
+            direction=str(row["direction"] or ""),
+            horizon=str(row["horizon"] or ""),
+            confidence=float(row["confidence"] or 0),
+            created_at=created_at,
+        )
+        haystack = " ".join(
+            [
+                signal.title,
+                signal.summary,
+                signal.so_what,
+                signal.topic_name,
+                signal.direction,
+                " ".join(signal.tickers),
+                " ".join(signal.normalized_tickers),
+                " ".join(signal.affected_markets),
+                " ".join(signal.asset_classes),
+            ]
+        ).lower()
+        matched_codes: list[str] = []
+        score = signal.impact_score * 10 + signal.confidence * 100 + min(signal.id, 10_000) / 1000
+        if normalized_code and normalized_code in signal.normalized_tickers:
+            score += 2200
+            matched_codes = [normalized_code]
+        elif terms:
+            term_hits = sum(1 for term in set(terms) if term and term in haystack)
+            if term_hits <= 0:
+                continue
+            score += 900 + term_hits * 80
+        else:
+            score += 100
+
+        key = signal.url or signal.title.lower()
+        if key and key in seen:
+            continue
+        seen.add(key)
+        ranked_signal = NewsSignal(**{**signal.to_dict(), "match_type": "chat", "matched_codes": matched_codes})
+        ranked.append((score, ranked_signal))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    signals = [signal for _, signal in ranked[: max(limit, 1)]]
+    return {
+        "ok": True,
+        "enabled": True,
+        "query": query,
+        "count": len(signals),
+        "available_count": len(ranked),
+        "signals": [signal.to_dict() for signal in signals],
+        "notes": [format_signal_note(signal) for signal in signals],
+    }

@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .auto_trader import AutoTrader
+from .chat_engine import run_ai_chat
 from .config import AppConfig, PROJECT_ROOT, public_config, save_runtime_risk_config
 from .futu_client import FutuPaperClient, _load_futu
 from .models import OrderIntent
@@ -358,6 +359,18 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     raise ValueError("notes must be a list")
                 result = AutoTrader(self.config).run_once(execute=execute, notes=[str(note) for note in notes])
                 self._send_json(result.__dict__)
+            elif path == "/api/ai/chat":
+                messages = payload.get("messages") or []
+                if not isinstance(messages, list):
+                    raise ValueError("messages must be a list")
+                result = run_ai_chat(
+                    self.config,
+                    topic=str(payload.get("topic", "")),
+                    messages=messages,
+                    use_news=bool(payload.get("use_news", True)),
+                    use_web=bool(payload.get("use_web", False)),
+                )
+                self._send_json(result)
             elif path == "/api/my-watchlist/add":
                 code = str(payload.get("code", "")).strip().upper()
                 if not code:

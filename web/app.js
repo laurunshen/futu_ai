@@ -12,6 +12,8 @@ const state = {
   newsPage: 1,
   newsTotalPages: 1,
   riskAllowedCodes: [],
+  chatMessages: [],
+  chatBusy: false,
   myWatchlistTimer: null,
 };
 
@@ -740,6 +742,76 @@ function renderDetailNewsSignals(signals, notes) {
   `;
 }
 
+function renderMarkdown(text) {
+  const lines = html(text || "").split(/\r?\n/);
+  const parts = [];
+  let inList = false;
+  const closeList = () => {
+    if (inList) {
+      parts.push("</ul>");
+      inList = false;
+    }
+  };
+  const inline = (value) => value.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeList();
+      return;
+    }
+    const heading = trimmed.match(/^#{2,3}\s+(.+)$/);
+    if (heading) {
+      closeList();
+      parts.push(`<h3>${inline(heading[1])}</h3>`);
+      return;
+    }
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/) || trimmed.match(/^\d+\.\s+(.+)$/);
+    if (bullet) {
+      if (!inList) {
+        parts.push("<ul>");
+        inList = true;
+      }
+      parts.push(`<li>${inline(bullet[1])}</li>`);
+      return;
+    }
+    closeList();
+    parts.push(`<p>${inline(trimmed)}</p>`);
+  });
+  closeList();
+  return parts.join("");
+}
+
+function renderChatMessages() {
+  const thread = el("chatThread");
+  if (!thread) return;
+  if (!state.chatMessages.length) {
+    thread.innerHTML = `<div class="empty">输入一支股票或行业，再问它适不适合模拟买入、卖出或继续观察。</div>`;
+    return;
+  }
+
+  thread.innerHTML = state.chatMessages
+    .map((message) => {
+      const role = message.role === "user" ? "user" : "assistant";
+      const news = role === "assistant" && (message.news_signals?.length || message.news_notes?.length)
+        ? `<div class="chat-news">${renderDetailNewsSignals(message.news_signals || [], message.news_notes || [])}</div>`
+        : "";
+      const webError = message.web_error
+        ? `<div class="chat-warning">联网检索失败，已退回只用本地新闻库：${html(message.web_error)}</div>`
+        : "";
+      return `
+        <article class="chat-message ${role}">
+          <div class="chat-role">${role === "user" ? "你" : "Gemini"}</div>
+          <div class="chat-content">${role === "assistant" ? renderMarkdown(message.content) : `<p>${html(message.content)}</p>`}</div>
+          ${webError}
+          ${news}
+        </article>
+      `;
+    })
+    .join("");
+  thread.scrollTop = thread.scrollHeight;
+}
+
 function renderDetailCandidates(candidates) {
   const rows = Array.isArray(candidates) ? candidates.slice(0, 8) : [];
   if (!rows.length) return detailText("无");
@@ -995,6 +1067,67 @@ async function runGemini() {
   }
 }
 
+async function sendChat() {
+  if (state.chatBusy) return;
+  const topic = el("chatTopic").value.trim();
+  const input = el("chatInput");
+  const content = input.value.trim() || (topic ? `聊一下 ${topic}` : "");
+  if (!topic && !content) {
+    input.focus();
+    return;
+  }
+
+  state.chatBusy = true;
+  el("sendChat").disabled = true;
+  el("chatStatus").textContent = "思考中";
+  state.chatMessages.push({ role: "user", content });
+  input.value = "";
+  renderChatMessages();
+
+  try {
+    const payload = await api("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        topic,
+        messages: state.chatMessages.map((message) => ({ role: message.role, content: message.content })),
+        use_news: el("chatUseNews").checked,
+        use_web: el("chatUseWeb").checked,
+      }),
+    });
+    state.chatMessages.push({
+      role: "assistant",
+      content: payload.reply || payload.error || "没有返回内容。",
+      news_signals: payload.news_signals || [],
+      news_notes: payload.news_notes || [],
+      web_error: payload.web_error || "",
+    });
+    renderChatMessages();
+    showOutput(payload);
+    await refreshGeminiUsage();
+    el("chatStatus").textContent = payload.ok ? "完成" : "失败";
+  } catch (err) {
+    state.chatMessages.push({
+      role: "assistant",
+      content: `这次对话失败了：${err.error || err.message || err}`,
+      news_signals: [],
+      news_notes: [],
+    });
+    renderChatMessages();
+    showOutput(err);
+    el("chatStatus").textContent = "失败";
+  } finally {
+    state.chatBusy = false;
+    el("sendChat").disabled = false;
+  }
+}
+
+function clearChat() {
+  state.chatMessages = [];
+  renderChatMessages();
+  el("chatStatus").textContent = "就绪";
+  el("chatInput").focus();
+}
+
 function bindSegments() {
   document.querySelectorAll("[data-account-market]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -1095,6 +1228,14 @@ function bindButtons() {
   el("validateOrder").addEventListener("click", validateOrder);
   el("executeOrder").addEventListener("click", executeOrder);
   el("runGemini").addEventListener("click", runGemini);
+  el("sendChat").addEventListener("click", sendChat);
+  el("clearChat").addEventListener("click", clearChat);
+  el("chatInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      sendChat();
+    }
+  });
   el("clearOutput").addEventListener("click", () => showOutput({}));
 }
 
@@ -1114,6 +1255,7 @@ async function init() {
   bindTabs();
   bindSegments();
   bindButtons();
+  renderChatMessages();
   await refreshStatus();
   await refreshSnapshot();
   await refreshMyWatchlist({ silent: true });

@@ -21,6 +21,7 @@
     <nav class="tabbar" aria-label="工作区">
       <button type="button" class="tab-button active" data-tab="overview" aria-selected="true">总览</button>
       <button type="button" class="tab-button" data-tab="market" aria-selected="false">行情</button>
+      <button type="button" class="tab-button" data-tab="chat" aria-selected="false">AI 对话</button>
       <button type="button" class="tab-button" data-tab="decisions" aria-selected="false">AI 决策</button>
       <button type="button" class="tab-button" data-tab="news" aria-selected="false">新闻</button>
       <button type="button" class="tab-button" data-tab="debug" aria-selected="false">调试</button>
@@ -196,6 +197,47 @@
               <button type="button" class="secondary compact" id="addMyWatch">添加</button>
             </div>
             <div class="watch-grid" id="myWatchGrid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="chat">
+        <div class="tab-grid chat-layout">
+          <aside class="panel span-4 chat-settings">
+            <div class="panel-head">
+              <h2>对话设置</h2>
+              <span class="pill">PAPER COACH</span>
+            </div>
+            <label class="wide-field">
+              讨论对象
+              <input id="chatTopic" placeholder="US.NVDA、HK.00700 或 AI 芯片" autocomplete="off">
+            </label>
+            <div class="chat-switches">
+              <label class="check-row">
+                <input id="chatUseNews" type="checkbox" checked>
+                <span>使用新闻库</span>
+              </label>
+              <label class="check-row">
+                <input id="chatUseWeb" type="checkbox">
+                <span>联网检索</span>
+              </label>
+            </div>
+            <button type="button" class="secondary compact chat-clear" id="clearChat">清空对话</button>
+            <div class="chat-note">默认只做模拟盘讨论，不会自动下单。</div>
+          </aside>
+
+          <div class="panel span-8 chat-panel">
+            <div class="panel-head">
+              <h2>AI 对话</h2>
+              <span class="detail-status" id="chatStatus">就绪</span>
+            </div>
+            <div class="chat-thread" id="chatThread">
+              <div class="empty">输入一支股票或行业，再问它适不适合模拟买入、卖出或继续观察。</div>
+            </div>
+            <div class="chat-compose">
+              <textarea id="chatInput" rows="3" placeholder="例如：英伟达现在适合模拟买入吗？帮我结合最近新闻拆一下。"></textarea>
+              <button type="button" class="primary-wide" id="sendChat">发送</button>
+            </div>
           </div>
         </div>
       </section>
