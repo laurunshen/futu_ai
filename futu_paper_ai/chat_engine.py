@@ -1,10 +1,53 @@
 from __future__ import annotations
 
 import json
+import re
+import socket
 from typing import Any
 
 from .config import AppConfig
-from .news_signals import search_news_signals
+from .futu_client import FutuPaperClient
+from .news_signals import normalize_ticker, search_news_signals
+
+
+COMMON_ALIASES = {
+    "阿里巴巴": "HK.09988",
+    "阿里": "HK.09988",
+    "腾讯": "HK.00700",
+    "英伟达": "US.NVDA",
+    "苹果": "US.AAPL",
+    "特斯拉": "US.TSLA",
+}
+
+POSITION_FIELDS = (
+    "code",
+    "stock_name",
+    "qty",
+    "can_sell_qty",
+    "cost_price",
+    "cost_price_valid",
+    "nominal_price",
+    "market_val",
+    "pl_val",
+    "pl_ratio",
+    "today_pl_val",
+    "today_pl_ratio",
+)
+
+QUOTE_FIELDS = (
+    "code",
+    "name",
+    "last_price",
+    "bid_price",
+    "ask_price",
+    "prev_close_price",
+    "open_price",
+    "high_price",
+    "low_price",
+    "volume",
+    "turnover",
+    "update_time",
+)
 
 
 def _usage_to_dict(usage: Any) -> dict[str, Any]:
@@ -39,41 +82,144 @@ def _clean_messages(messages: Any) -> list[dict[str, str]]:
     return clean
 
 
+def _compact_row(row: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    return {field: row.get(field) for field in fields if field in row and row.get(field) not in (None, "", [])}
+
+
+def _extract_codes(text: str) -> list[str]:
+    normalized: set[str] = set()
+    upper_text = str(text or "").upper()
+    for alias, code in COMMON_ALIASES.items():
+        if alias in str(text or ""):
+            normalized.add(code)
+
+    ignored_plain_tokens = {"A", "AI", "BUY", "SELL", "HOLD", "USD", "HKD", "US", "HK", "CN", "IPO", "ETF"}
+    patterns = (
+        r"\b(?:US|HK|SH|SZ)\.?[A-Z0-9][A-Z0-9.\-]{0,9}\b",
+        r"\b\d{1,5}\.HK\b",
+        r"\b\d{6}\.(?:SH|SZ)\b",
+        r"\b[A-Z]{2,5}\b",
+    )
+    for pattern in patterns:
+        for raw in re.findall(pattern, upper_text):
+            if raw in ignored_plain_tokens:
+                continue
+            if "." not in raw and not raw.startswith(("US", "HK", "SH", "SZ")) and len(raw) <= 2:
+                continue
+            code = normalize_ticker(raw)
+            if code:
+                normalized.add(code)
+    return sorted(normalized)
+
+
+def _load_trading_context(config: AppConfig, query: str) -> dict[str, Any]:
+    requested_codes = _extract_codes(query)
+    try:
+        with socket.create_connection((config.opend_host, config.opend_port), timeout=1.2):
+            pass
+    except OSError as exc:
+        return {
+            "requested_codes": requested_codes,
+            "positions": [],
+            "quotes": [],
+            "errors": [f"opend:{config.opend_host}:{config.opend_port}:{exc}"],
+        }
+
+    client = FutuPaperClient(config)
+    positions: list[dict[str, Any]] = []
+    errors: list[str] = []
+    markets = sorted((config.gemini.observe_markets or config.risk.allowed_markets) & {"US", "HK", "CN"})
+    if not markets:
+        markets = ["US", "HK"]
+
+    for market in markets:
+        try:
+            payload = client.positions(market)
+        except Exception as exc:
+            errors.append(f"positions:{market}:{exc}")
+            continue
+        if not payload.get("ok"):
+            errors.append(f"positions:{market}:{payload.get('data') or payload.get('error') or 'failed'}")
+            continue
+        for row in payload.get("data") or []:
+            if isinstance(row, dict):
+                compact = _compact_row(row, POSITION_FIELDS)
+                compact["market"] = market
+                positions.append(compact)
+
+    position_codes = [str(row.get("code", "")).upper() for row in positions if row.get("code")]
+    quote_codes = sorted(set(requested_codes) | set(position_codes))[:24]
+    quotes: list[dict[str, Any]] = []
+    if quote_codes:
+        try:
+            payload = client.snapshot(quote_codes)
+        except Exception as exc:
+            errors.append(f"quotes:{exc}")
+        else:
+            if payload.get("ok"):
+                quotes = [
+                    _compact_row(row, QUOTE_FIELDS)
+                    for row in payload.get("data") or []
+                    if isinstance(row, dict)
+                ]
+            else:
+                errors.append(f"quotes:{payload.get('data') or payload.get('error') or 'failed'}")
+
+    return {
+        "requested_codes": requested_codes,
+        "positions": positions[:24],
+        "quotes": quotes[:24],
+        "errors": errors[-6:],
+    }
+
+
 def _build_prompt(
     *,
     topic: str,
     messages: list[dict[str, str]],
     news_payload: dict[str, Any],
+    trading_context: dict[str, Any],
     use_web: bool,
 ) -> str:
     return (
         "你是一个模拟盘交易教练，正在和一个交易新手讨论股票、行业或宏观主题。\n"
         "你的目标是帮助用户形成交易假设、理解买入/卖出/观望理由，而不是提供真实投资建议。\n"
-        "你可以给出模拟盘倾向，但必须区分事实、推断和不确定性。\n\n"
+        "你可以给出模拟盘倾向，但必须区分事实、推断和不确定性。\n"
+        "最重要：用户最新一条消息优先级最高。你必须先理解用户到底在问什么，再逐项回答，不能只回答其中一个局部。\n\n"
         "回答规则：\n"
         "- 用中文，语气直接、清楚、适合新手。\n"
         "- 只能把 BUY / SELL / HOLD 当作模拟盘讨论倾向，不要暗示真实资金必然操作。\n"
+        "- 如果用户给了持仓、成本价、买入价、亏损、盈利、时间周期或风险偏好，必须在回答中逐项使用这些信息。\n"
+        "- 如果本地持仓/行情上下文里有对应标的，必须优先使用这些数据；如果没有当前价，就明确说缺少当前价，不要编造。\n"
+        "- 如果能得到当前价和成本价，必须计算大概浮动盈亏百分比；公式写清楚，结果可以取近似值。\n"
         "- 证据不足时优先 HOLD，并告诉用户还缺什么信息。\n"
         "- 不要编造财报、价格、新闻或公司事件；没有信息就明确说没有。\n"
         "- 如果使用了本地新闻库，必须点名引用具体新闻标题。\n"
         "- 如果用户问的是行业，先讲行业逻辑，再落到可观察标的。\n"
         "- 卖出建议要说明是否只适用于已有持仓；不要鼓励裸卖空。\n"
+        "- 如果用户消息里有多个问题、多个条件或多个标的，请用编号逐项回应。\n"
+        "- 不要用表格，避免前端渲染难看。\n"
         "- 最后给出一个小白能执行的观察清单。\n\n"
         "请用下面的 Markdown 结构回答：\n"
-        "### 倾向\n"
-        "一句话说明 BUY / SELL / HOLD 倾向和置信度。\n"
-        "### 买入理由\n"
-        "列出支持试错的因素。\n"
-        "### 卖出/回避理由\n"
+        "### 我理解的问题\n"
+        "用 1-3 条复述用户真实想问什么，必须包含用户给出的成本、持仓或行业约束。\n"
+        "### 结论\n"
+        "一句话说明 BUY / SELL / HOLD 倾向、置信度，以及这只是模拟盘讨论。\n"
+        "### 持仓/价格测算\n"
+        "如果有持仓或成本，说明成本、当前价、浮盈浮亏；没有数据就说缺什么。\n"
+        "### 支持继续持有或买入的理由\n"
+        "列出支持因素。\n"
+        "### 卖出/减仓/回避理由\n"
         "列出反向因素和风险。\n"
         "### 关键新闻\n"
         "引用本地新闻库或联网检索中真正相关的材料；无相关材料就说明。\n"
-        "### 观察清单\n"
-        "给出后续需要观察的 3-5 个信号。\n"
         "### 模拟盘动作\n"
         "给出一个保守的模拟盘动作建议，允许是继续观察。\n\n"
+        "### 我还需要你补充什么\n"
+        "列出为了下次判断更准确需要用户补充的 1-3 个信息。\n\n"
         f"讨论对象: {topic or '未指定'}\n"
         f"联网检索开关: {'已开启' if use_web else '未开启'}\n"
+        f"本地持仓/行情上下文: {json.dumps(trading_context, ensure_ascii=False, default=str)[:16000]}\n"
         f"本地新闻库检索结果: {json.dumps(news_payload, ensure_ascii=False, default=str)[:24000]}\n"
         f"对话历史: {json.dumps(messages, ensure_ascii=False, default=str)[:16000]}\n"
     )
@@ -112,6 +258,7 @@ def run_ai_chat(
     news_payload: dict[str, Any] = {"ok": True, "enabled": False, "signals": [], "notes": []}
     if use_news:
         news_payload = search_news_signals(config.news, query, limit=8)
+    trading_context = _load_trading_context(config, query)
 
     try:
         from google import genai
@@ -126,7 +273,13 @@ def run_ai_chat(
         }
 
     client = genai.Client(api_key=config.gemini.api_key)
-    prompt = _build_prompt(topic=topic, messages=clean_messages, news_payload=news_payload, use_web=use_web)
+    prompt = _build_prompt(
+        topic=topic,
+        messages=clean_messages,
+        news_payload=news_payload,
+        trading_context=trading_context,
+        use_web=use_web,
+    )
     web_error = ""
     tools = None
     if use_web:
@@ -142,7 +295,7 @@ def run_ai_chat(
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.25,
-                max_output_tokens=1800,
+                max_output_tokens=3200,
                 tools=tools,
             ),
         )
@@ -159,10 +312,16 @@ def run_ai_chat(
         web_error = str(exc)
         response = client.models.generate_content(
             model=config.gemini.model,
-            contents=_build_prompt(topic=topic, messages=clean_messages, news_payload=news_payload, use_web=False),
+            contents=_build_prompt(
+                topic=topic,
+                messages=clean_messages,
+                news_payload=news_payload,
+                trading_context=trading_context,
+                use_web=False,
+            ),
             config=types.GenerateContentConfig(
                 temperature=0.25,
-                max_output_tokens=1800,
+                max_output_tokens=3200,
             ),
         )
 
@@ -173,6 +332,7 @@ def run_ai_chat(
         "use_news": bool(use_news),
         "use_web": bool(use_web and not web_error),
         "web_error": web_error,
+        "trading_context": trading_context,
         "news_signals": news_payload.get("signals", []),
         "news_notes": news_payload.get("notes", []),
         "gemini_usage": _usage_to_dict(getattr(response, "usage_metadata", None)),
