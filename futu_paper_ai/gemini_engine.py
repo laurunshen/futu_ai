@@ -15,30 +15,30 @@ PositionAction = Literal["ENTER", "ADD", "HOLD", "TRIM", "EXIT", "WATCH"]
 
 
 class GeminiResearchBriefModel(BaseModel):
-    market_analyst: str = Field(description="Technical/market snapshot read based only on supplied Futu quote data.")
-    news_analyst: str = Field(description="News read based only on supplied notes/signals; say when news is missing.")
-    portfolio_analyst: str = Field(description="Portfolio-aware read using supplied local holdings, costs, cash, and P/L.")
-    bull_case: str = Field(description="Best evidence-supported bullish argument.")
-    bear_case: str = Field(description="Best evidence-supported bearish argument.")
-    risk_review: str = Field(description="Conservative risk manager review and sizing/avoidance concerns.")
-    manager_summary: str = Field(description="Final portfolio-manager synthesis before the action field.")
-    missing_data: list[str] = Field(description="Important missing inputs that limit confidence.")
+    market_analyst: str = Field(description="必须用简体中文。只基于输入的富途行情数据分析技术面、价格和流动性。")
+    news_analyst: str = Field(description="必须用简体中文。只基于输入的消息源和新闻信号分析；没有相关新闻就明确说明缺失。")
+    portfolio_analyst: str = Field(description="必须用简体中文。结合本地持仓、成本、现金、浮盈浮亏和仓位暴露分析。")
+    bull_case: str = Field(description="必须用简体中文。写出证据支持下最强的看多理由。")
+    bear_case: str = Field(description="必须用简体中文。写出证据支持下最强的看空、回避或减仓理由。")
+    risk_review: str = Field(description="必须用简体中文。用保守风控经理视角审查仓位、止损、证据不足和执行风险。")
+    manager_summary: str = Field(description="必须用简体中文。在给出 action 前做组合经理式综合判断。")
+    missing_data: list[str] = Field(description="必须用简体中文。列出限制置信度的关键缺失输入。")
 
 
 class GeminiTradeDecisionModel(BaseModel):
-    action: Action = Field(description="BUY, SELL, or HOLD. Prefer HOLD when evidence is weak.")
-    code: str = Field(description="Futu code to trade, or NONE when action is HOLD.")
-    rating: Rating = Field(description="Five-tier portfolio rating: BUY, OVERWEIGHT, HOLD, UNDERWEIGHT, or SELL.")
-    position_action: PositionAction = Field(description="Portfolio action: ENTER, ADD, HOLD, TRIM, EXIT, or WATCH.")
-    confidence: int = Field(ge=0, le=100, description="Decision confidence from 0 to 100.")
-    reason: str = Field(description="Plain-language reason for portfolio review and risk context.")
-    evidence: list[str] = Field(description="Concrete observations used for the decision.")
-    risk: str = Field(description="What can go wrong with this decision.")
-    invalidation: str = Field(description="What would prove the idea wrong.")
-    max_notional: float = Field(ge=0, description="Maximum simulated order value to use.")
-    time_horizon: str = Field(description="Expected holding horizon.")
-    learning_note: str = Field(description="One concise review takeaway for the user.")
-    research: GeminiResearchBriefModel = Field(description="TradingAgents-lite multi-role research brief.")
+    action: Action = Field(description="只能是 BUY、SELL 或 HOLD；证据不足时优先 HOLD。")
+    code: str = Field(description="富途代码；如果 action 是 HOLD，填 NONE。")
+    rating: Rating = Field(description="五档组合评级：BUY、OVERWEIGHT、HOLD、UNDERWEIGHT 或 SELL。")
+    position_action: PositionAction = Field(description="组合层动作：ENTER、ADD、HOLD、TRIM、EXIT 或 WATCH。")
+    confidence: int = Field(ge=0, le=100, description="决策置信度，0 到 100。")
+    reason: str = Field(description="必须用简体中文。给用户看的决策理由，围绕组合复盘和风险上下文。")
+    evidence: list[str] = Field(description="必须用简体中文。列出支撑决策的具体观察。")
+    risk: str = Field(description="必须用简体中文。说明这个决策可能错在哪里。")
+    invalidation: str = Field(description="必须用简体中文。说明什么条件会推翻当前判断。")
+    max_notional: float = Field(ge=0, description="本次最多使用的本地账本/模拟订单金额。")
+    time_horizon: str = Field(description="必须用简体中文。预期持有或观察周期。")
+    learning_note: str = Field(description="必须用简体中文。给用户的一条简短复盘提示。")
+    research: GeminiResearchBriefModel = Field(description="必须用简体中文。TradingAgents-lite 多角色研究简报。")
 
 
 @dataclass(frozen=True)
@@ -67,11 +67,11 @@ class GeminiTradeDecision:
             confidence=0,
             reason=reason,
             evidence=[],
-            risk="No trade is safer than forcing a weak setup.",
-            invalidation="New evidence with stronger price/volume/news support appears.",
+            risk="没有足够证据时，不交易比强行交易更安全。",
+            invalidation="后续出现更强的价格、成交量或新闻证据时，可以重新评估。",
             max_notional=0.0,
-            time_horizon="observe",
-            learning_note="When evidence is thin, doing nothing is also a trading decision.",
+            time_horizon="继续观察",
+            learning_note="证据不足时，空仓或不动作本身也是一种交易决策。",
             research={
                 "market_analyst": "",
                 "news_analyst": "",
@@ -109,9 +109,9 @@ class GeminiDecisionEngine:
     ) -> GeminiTradeDecision:
         self.last_usage = {}
         if not self.config.api_key:
-            return GeminiTradeDecision.hold("GEMINI_API_KEY is missing.")
+            return GeminiTradeDecision.hold("缺少 GEMINI_API_KEY，无法生成 AI 决策。")
         if not candidates:
-            return GeminiTradeDecision.hold("No valid candidates were available.")
+            return GeminiTradeDecision.hold("当前没有可用候选标的，保持观望。")
 
         try:
             from google import genai
@@ -160,7 +160,7 @@ class GeminiDecisionEngine:
                 model = GeminiTradeDecisionModel.model_validate(payload)
                 return GeminiTradeDecision.from_model(model)
             except Exception:
-                return GeminiTradeDecision.hold("Gemini returned an invalid decision format.")
+                return GeminiTradeDecision.hold("Gemini 返回格式无效，本轮保持观望。")
 
     def _with_compat_defaults(self, payload: Any) -> Any:
         if not isinstance(payload, dict):
@@ -226,6 +226,7 @@ class GeminiDecisionEngine:
             "- position_action 用 ENTER/ADD/HOLD/TRIM/EXIT/WATCH 表达组合层动作。\n"
             "- missing_data 写出限制置信度的缺失信息，例如当前价缺失、财报缺失、相关新闻缺失。\n\n"
             "硬规则：\n"
+            "- 所有自然语言字段必须使用简体中文，包括 reason、evidence、risk、invalidation、time_horizon、learning_note 和 research 里的所有文本；只允许 action/rating/position_action/code 保持枚举或代码英文。\n"
             "- 如果 account.portfolio_kind=actual，必须把组合称为实际仓位或实际仓位镜像；不得写“模拟盘教学”“新手教学盘”等容易误导的表述。\n"
             "- 如果 account.portfolio_kind=paper，才可以称为模拟实验盘；但也要按严肃风控处理。\n"
             "- 不要编造新闻、财报、宏观事件或价格数据。\n"

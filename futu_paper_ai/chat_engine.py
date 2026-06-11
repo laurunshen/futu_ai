@@ -271,7 +271,7 @@ def run_ai_chat(
     if not config.gemini.api_key:
         return {
             "ok": False,
-            "error": "GEMINI_API_KEY is missing.",
+            "error": "缺少 GEMINI_API_KEY。",
             "reply": "Gemini key 没有配置，所以现在还不能对话。",
             "news_signals": [],
             "news_notes": [],
@@ -279,7 +279,7 @@ def run_ai_chat(
     if not query:
         return {
             "ok": False,
-            "error": "topic or message is required.",
+            "error": "需要输入讨论对象或消息。",
             "reply": "先输入一个股票、行业或问题，我再帮你一起拆。",
             "news_signals": [],
             "news_notes": [],

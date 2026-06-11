@@ -850,7 +850,7 @@ def portfolio_context(portfolio_id: str | None = None) -> dict[str, Any]:
             "cash": active["cash"],
             "cash_by_currency": active.get("cash_by_currency", {}),
             "fx_to_hkd": active.get("fx_to_hkd", {}),
-            "buying_power_rule": "Local ledger can auto-convert base currency cash for cross-currency simulated buys.",
+            "buying_power_rule": "本地账本买入跨币种资产时，可以按汇率从基础币种现金自动换汇扣款。",
             "apply_mode": active.get("apply_mode", "manual"),
             "recent_operations": list(active.get("operations", []))[-20:],
             "updated_at": active["updated_at"],

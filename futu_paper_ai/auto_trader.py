@@ -167,12 +167,12 @@ class AutoTrader:
             "fx_source": fx_payload.get("source"),
             "fx_ok": bool(fx_payload.get("ok")),
             "fx_error": fx_payload.get("error"),
-            "buying_power_rule": "Local ledger can auto-convert base currency cash for cross-currency simulated buys; FX uses Futu OpenD if available, otherwise local defaults are explicitly recorded.",
+            "buying_power_rule": "本地账本买入跨币种资产时，可按汇率从基础币种现金自动换汇扣款；优先使用富途 OpenD FX，失败时明确记录本地默认汇率来源。",
             "apply_mode": portfolio.get("apply_mode", "manual"),
             "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
             "position_count": len(positions),
             "recent_operations": list(portfolio.get("operations", []))[-20:],
-            "price_rule": "Current prices are only from Futu OpenD snapshots attached to positions/candidates.",
+            "price_rule": "当前价只能来自持仓和候选行情里的富途 OpenD 快照。",
         }
         news_payload = load_news_signals(
             self.config.news,
@@ -382,7 +382,7 @@ class AutoTrader:
             by_code[code] = WatchItem(
                 code=code,
                 name=str(position.get("name") or code),
-                sector=str(position.get("note") or "Portfolio"),
+                sector=str(position.get("note") or "持仓"),
                 market=market,
             )
         return sorted(by_code.values(), key=lambda item: item.code)
