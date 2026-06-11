@@ -291,6 +291,7 @@ textarea {
 .usage-grid,
 .risk-list,
 .decision-list,
+.decision-tracking-list,
 .signal-list {
   display: grid;
   gap: 10px;
@@ -1162,6 +1163,143 @@ tr:last-child td {
   margin-bottom: 10px;
 }
 
+.evaluation-tools {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.evaluation-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.evaluation-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.evaluation-portfolios {
+  display: grid;
+  gap: 10px;
+}
+
+.evaluation-portfolio,
+.decision-tracking-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+  min-width: 0;
+}
+
+.evaluation-portfolio-top,
+.decision-tracking-top,
+.equity-legend,
+.equity-legend-item,
+.horizon-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.evaluation-portfolio-top {
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evaluation-portfolio-top strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.evaluation-nav {
+  margin-top: 8px;
+  font-size: 20px;
+  font-weight: 780;
+}
+
+.evaluation-meta,
+.decision-tracking-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.decision-tracking-top {
+  justify-content: space-between;
+}
+
+.decision-tracking-grid span,
+.horizon-pill {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #e7eef6;
+  color: #113a63;
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.decision-tracking-grid .up,
+.horizon-pill.up {
+  background: rgba(8, 127, 91, 0.12);
+  color: var(--green);
+}
+
+.decision-tracking-grid .down,
+.horizon-pill.down {
+  background: rgba(201, 42, 42, 0.1);
+  color: var(--red);
+}
+
+.horizon-row {
+  margin-top: 10px;
+}
+
+.equity-chart-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  overflow: hidden;
+}
+
+#equityChart {
+  display: block;
+  width: 100%;
+  min-height: 260px;
+}
+
+.equity-legend {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.equity-legend-item {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #fbfcfd;
+}
+
+.equity-legend-item strong {
+  color: var(--text);
+}
+
+.equity-legend-item em {
+  font-style: normal;
+}
+
+.legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
 .signal-tools {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) 150px 130px 110px;
@@ -1828,6 +1966,10 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .evaluation-metrics {
+    grid-template-columns: 1fr;
+  }
+
   .signal-tools {
     grid-template-columns: 1fr 1fr;
   }
@@ -1881,6 +2023,7 @@ pre {
 
 @media (max-width: 420px) {
   .decision-tools,
+  .evaluation-tools,
   .signal-tools {
     grid-template-columns: 1fr;
   }

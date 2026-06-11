@@ -8,6 +8,8 @@ const state = {
   decisionPage: 1,
   decisionTotalPages: 1,
   decisionPortfolioId: "ALL",
+  evaluation: null,
+  evaluationPortfolioId: "ALL",
   newsSignals: [],
   newsPayload: null,
   newsPage: 1,
@@ -79,6 +81,20 @@ function fmtUsd(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "$0";
   return `$${number.toFixed(number < 0.01 ? 4 : 2)}`;
+}
+
+function fmtHkd(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "HKD -";
+  return `HKD ${number.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function fmtPct(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  const sign = number > 0 ? "+" : "";
+  return `${sign}${number.toFixed(2)}%`;
 }
 
 function html(value) {
@@ -248,6 +264,30 @@ async function refreshDecisions() {
     renderDecisionPager(payload);
   } catch (err) {
     el("decisionList").innerHTML = `<div class="empty">Decision history unavailable</div>`;
+    showOutput(err);
+  }
+}
+
+async function refreshEvaluation() {
+  const params = new URLSearchParams({ limit: "500" });
+  const portfolioId = el("evaluationPortfolio")?.value || state.evaluationPortfolioId || "";
+  const start = el("evaluationStart")?.value || "";
+  const end = el("evaluationEnd")?.value || "";
+  if (portfolioId && portfolioId !== "ALL") params.set("portfolio_id", portfolioId);
+  if (start) params.set("date_start", start);
+  if (end) params.set("date_end", end);
+  try {
+    const payload = await api(`/api/evaluation?${params.toString()}`);
+    state.evaluation = payload;
+    renderEvaluation(payload);
+    if (state.activeTab === "decisions" && Number.isInteger(state.selectedDecisionIndex)) {
+      renderDecisionDetail(state.decisionEntries[state.selectedDecisionIndex]);
+    }
+  } catch (err) {
+    state.evaluation = null;
+    el("evaluationSummary").innerHTML = `<div class="empty">Evaluation unavailable</div>`;
+    el("decisionTrackingList").innerHTML = `<div class="empty">Decision tracking unavailable</div>`;
+    drawEquityChart([]);
     showOutput(err);
   }
 }
@@ -460,6 +500,19 @@ function renderDecisionPortfolioOptions({ followActive = false } = {}) {
   state.decisionPortfolioId = select.value;
 }
 
+function renderEvaluationPortfolioOptions({ followActive = false } = {}) {
+  const select = el("evaluationPortfolio");
+  if (!select) return;
+  const portfolioIds = new Set(state.portfolios.map((portfolio) => portfolio.id));
+  const current = followActive ? state.activePortfolioId : state.evaluationPortfolioId || select.value || "ALL";
+  select.innerHTML = [
+    `<option value="ALL">全部模拟盘</option>`,
+    ...state.portfolios.map((portfolio) => `<option value="${html(portfolio.id)}">${html(portfolio.name)}</option>`),
+  ].join("");
+  select.value = portfolioIds.has(current) || current === "ALL" ? current : state.activePortfolioId || "ALL";
+  state.evaluationPortfolioId = select.value;
+}
+
 function renderPortfolios(payload) {
   state.portfolios = payload.portfolios || [];
   state.activePortfolioId = payload.active_id || state.portfolios[0]?.id || "";
@@ -469,6 +522,7 @@ function renderPortfolios(payload) {
     renderPortfolioDetails(null, payload.quote_error);
     renderChatPortfolioOptions();
     renderDecisionPortfolioOptions();
+    renderEvaluationPortfolioOptions();
     return;
   }
 
@@ -502,6 +556,7 @@ function renderPortfolios(payload) {
   renderPortfolioDetails(activePortfolio(), payload.quote_error);
   renderChatPortfolioOptions();
   renderDecisionPortfolioOptions();
+  renderEvaluationPortfolioOptions();
 }
 
 function renderPortfolioDetails(portfolio, quoteError = "") {
@@ -791,6 +846,280 @@ function renderPortfolioTradeAction(portfolio) {
   if (reasonInput) {
     reasonInput.placeholder = syncEnabled ? "富途模拟单备注、交易理由" : "本人券商实际买入/卖出、调仓原因";
   }
+}
+
+function evaluationForDecision(row) {
+  const rows = state.evaluation?.decision_tracking || [];
+  const key = String(row?.evaluation_id || row?.decision_id || "");
+  if (!key) return null;
+  return rows.find((item) => String(item.evaluation_id || item.decision_id || "") === key) || null;
+}
+
+function horizonStatusLabel(status) {
+  return {
+    measured: "已记录",
+    pending: "等待",
+    missing_quote: "缺行情",
+    missing_baseline: "缺基准",
+    missing_timestamp: "缺时间",
+  }[String(status || "")] || "未知";
+}
+
+function renderHorizonPills(horizons) {
+  const rows = Array.isArray(horizons) ? horizons : [];
+  if (!rows.length) return `<div class="empty compact-empty">暂无追踪</div>`;
+  return `
+    <div class="horizon-row">
+      ${rows
+        .map((horizon) => {
+          const value = horizon.decision_return_pct ?? horizon.raw_return_pct;
+          const cls = horizon.status === "measured" ? changeClass(Number(value)) : "flat";
+          const text = horizon.status === "measured" ? fmtPct(value) : horizonStatusLabel(horizon.status);
+          return `<span class="horizon-pill ${cls}" title="${html(horizon.due_at || "")}">${html(horizon.days)}D ${html(text)}</span>`;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderDecisionFollowups(row) {
+  if (!row) return detailText("暂无复盘追踪数据");
+  const current = row.current_return_pct === null || row.current_return_pct === undefined
+    ? "-"
+    : `${fmtPct(row.current_return_pct)} 原始 / ${row.current_decision_return_pct === null || row.current_decision_return_pct === undefined ? "-" : fmtPct(row.current_decision_return_pct)} 方向调整`;
+  return `
+    ${detailKvGrid([
+      ["追踪标的", row.code || "-"],
+      ["基准价", row.baseline_price ? `${row.baseline_price} · ${row.baseline_price_source || ""}` : "-"],
+      ["当前价", row.current_price || "-"],
+      ["当前表现", current],
+    ])}
+    ${renderHorizonPills(row.horizons)}
+  `;
+}
+
+function renderEvaluation(payload) {
+  const status = el("evaluationStatus");
+  if (status) {
+    status.className = `detail-status ${payload.ok ? "buy" : "sell"}`;
+    status.textContent = payload.ok ? "OpenD 估值" : "行情异常";
+  }
+  renderEvaluationSummary(payload);
+  renderEquity(payload.equity_curves || []);
+  renderDecisionTracking(payload.decision_tracking || []);
+  showOutput(payload);
+}
+
+function renderEvaluationSummary(payload) {
+  const target = el("evaluationSummary");
+  const metrics = payload.metrics || {};
+  const metricCards = [
+    ["决策样本", metrics.decision_count],
+    ["已追踪窗口", metrics.measured_horizons],
+    ["方向胜率", metrics.win_rate === null || metrics.win_rate === undefined ? "-" : fmtPct(metrics.win_rate)],
+    ["平均方向收益", metrics.avg_decision_return_pct === null || metrics.avg_decision_return_pct === undefined ? "-" : fmtPct(metrics.avg_decision_return_pct)],
+  ];
+  const portfolioRows = (payload.portfolio_summaries || [])
+    .map((portfolio) => {
+      const nav = portfolio.nav || {};
+      const stats = portfolio.trade_stats || {};
+      const missing = (nav.missing_quotes || []).join(", ");
+      return `
+        <article class="evaluation-portfolio">
+          <div class="evaluation-portfolio-top">
+            <strong>${html(portfolio.name)}</strong>
+            <span>${html(applyModeLabel(portfolio.apply_mode))}</span>
+          </div>
+          <div class="evaluation-nav">${html(fmtHkd(nav.nav_hkd))}</div>
+          <div class="evaluation-meta">
+            <span>现金 ${html(fmtHkd(nav.cash_hkd))}</span>
+            <span>持仓 ${html(fmtHkd(nav.market_value_hkd))}</span>
+            <span>交易 ${html(stats.trade_count || 0)}</span>
+            <span>换手 ${html(fmtHkd(stats.turnover_hkd || 0))}</span>
+          </div>
+          ${missing ? `<div class="learning-note">缺行情：${html(missing)}</div>` : ""}
+        </article>
+      `;
+    })
+    .join("");
+  target.innerHTML = `
+    <div class="metric-grid evaluation-metrics">
+      ${metricCards
+        .map(
+          ([label, value]) => `
+            <div class="metric">
+              <div class="metric-label">${html(label)}</div>
+              <div class="metric-value">${html(value)}</div>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+    <div class="evaluation-portfolios">
+      ${portfolioRows || `<div class="empty">暂无组合估值</div>`}
+    </div>
+    ${payload.quote_error ? `<div class="chat-warning">${html(payload.quote_error)}</div>` : ""}
+  `;
+}
+
+function renderEquity(curves) {
+  drawEquityChart(curves);
+  const legend = el("equityLegend");
+  const rows = (curves || []).filter((curve) => (curve.points || []).length);
+  if (!rows.length) {
+    legend.innerHTML = `<div class="empty compact-empty">暂无收益曲线点。新决策会自动写入组合净值基线。</div>`;
+    return;
+  }
+  const colors = chartColors();
+  legend.innerHTML = rows
+    .map((curve, index) => {
+      const stats = curve.stats || {};
+      return `
+        <div class="equity-legend-item">
+          <span class="legend-swatch" style="background:${colors[index % colors.length]}"></span>
+          <span>${html(portfolioNameById(curve.portfolio_id))}</span>
+          <strong>${html(fmtPct(stats.return_pct))}</strong>
+          <em>回撤 ${html(fmtPct(stats.max_drawdown_pct))}</em>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function chartColors() {
+  return ["#1c6dd0", "#087f5b", "#b26b00", "#c92a2a", "#51606a", "#0b7285"];
+}
+
+function portfolioNameById(portfolioId) {
+  return state.portfolios.find((portfolio) => portfolio.id === portfolioId)?.name || portfolioId || "组合";
+}
+
+function drawEquityChart(curves) {
+  const canvas = el("equityChart");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.floor(rect.width || 900));
+  const height = 260;
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  canvas.style.height = `${height}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#fbfcfd";
+  ctx.fillRect(0, 0, width, height);
+
+  const series = (curves || [])
+    .map((curve) => ({
+      ...curve,
+      points: (curve.points || [])
+        .map((point) => ({ ...point, x: Date.parse(point.timestamp), y: Number(point.nav_hkd) }))
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && point.y > 0),
+    }))
+    .filter((curve) => curve.points.length);
+
+  if (!series.length) {
+    ctx.fillStyle = "#62707a";
+    ctx.font = "13px system-ui";
+    ctx.fillText("暂无收益曲线点", 20, 40);
+    return;
+  }
+
+  const pad = { left: 54, right: 18, top: 18, bottom: 32 };
+  const xs = series.flatMap((curve) => curve.points.map((point) => point.x));
+  const ys = series.flatMap((curve) => curve.points.map((point) => point.y));
+  let minX = Math.min(...xs);
+  let maxX = Math.max(...xs);
+  let minY = Math.min(...ys);
+  let maxY = Math.max(...ys);
+  if (minX === maxX) {
+    minX -= 86400000;
+    maxX += 86400000;
+  }
+  if (minY === maxY) {
+    minY *= 0.98;
+    maxY *= 1.02;
+  }
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const xScale = (value) => pad.left + ((value - minX) / (maxX - minX)) * plotW;
+  const yScale = (value) => pad.top + (1 - (value - minY) / (maxY - minY)) * plotH;
+
+  ctx.strokeStyle = "#d9e0e4";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#62707a";
+  ctx.font = "12px system-ui";
+  for (let i = 0; i <= 4; i += 1) {
+    const y = pad.top + (plotH / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    const value = maxY - ((maxY - minY) / 4) * i;
+    ctx.fillText(Math.round(value).toLocaleString(), 8, y + 4);
+  }
+
+  const colors = chartColors();
+  series.forEach((curve, index) => {
+    const color = colors[index % colors.length];
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    curve.points.forEach((point, pointIndex) => {
+      const x = xScale(point.x);
+      const y = yScale(point.y);
+      if (pointIndex === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    curve.points.forEach((point) => {
+      const x = xScale(point.x);
+      const y = yScale(point.y);
+      ctx.beginPath();
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  });
+}
+
+function renderDecisionTracking(rows) {
+  const target = el("decisionTrackingList");
+  if (!target) return;
+  const visibleRows = rows.slice(0, 120);
+  if (!visibleRows.length) {
+    target.innerHTML = `<div class="empty">还没有可评估的 AI 决策</div>`;
+    return;
+  }
+  target.innerHTML = visibleRows
+    .map((row) => {
+      const directionValue = row.current_decision_return_pct ?? row.current_return_pct;
+      const cls = changeClass(Number(directionValue));
+      const targetLabel = row.target_source === "top_candidate_for_hold" ? "观察候选" : "决策标的";
+      return `
+        <article class="decision-tracking-item">
+          <div class="decision-tracking-top">
+            <div>
+              <div class="decision-code">${html(row.code || "NONE")}</div>
+              <div class="decision-time">${html(fmtTime(row.timestamp))} · ${html(row.portfolio_name || "-")} · ${html(targetLabel)}</div>
+            </div>
+            <div class="decision-badges">
+              <span class="decision-action ${html(String(row.action || "").toLowerCase())}">${html(row.action)}</span>
+              <span class="decision-confidence">${html(row.confidence)}%</span>
+            </div>
+          </div>
+          <div class="decision-tracking-grid">
+            <span>基准 ${html(row.baseline_price || "-")}</span>
+            <span>当前 ${html(row.current_price || "-")}</span>
+            <span class="${cls}">当前 ${html(fmtPct(directionValue))}</span>
+            <span>${html(applicationLabel({ status: row.application_status }))}</span>
+          </div>
+          ${renderHorizonPills(row.horizons)}
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderAccount(row) {
@@ -1389,6 +1718,7 @@ function renderDecisionDetail(row) {
   const application = row.application || null;
   const usage = row.gemini_usage || {};
   const portfolio = row.portfolio || null;
+  const followup = evaluationForDecision(row);
   const newsNotes = Array.isArray(row.news_notes) ? row.news_notes : [];
   const newsSignals = Array.isArray(row.news_signals) ? row.news_signals : [];
   const outputTokens = (Number(usage.candidates_token_count) || 0) + (Number(usage.thoughts_token_count) || 0);
@@ -1466,6 +1796,7 @@ function renderDecisionDetail(row) {
         ["换汇", application?.trade?.fx?.source_amount ? `${application.trade.fx.source_amount} ${application.trade.fx.source_currency} -> ${application.trade.fx.target_amount} ${application.trade.fx.target_currency} · ${application.trade.fx.source || ""}` : ""],
       ])
     )}
+    ${detailSection("复盘追踪", renderDecisionFollowups(followup))}
     ${application?.futu_sync ? detailSection("富途同步", renderFutuSyncDetail(application)) : ""}
     ${canApplyDecision ? `<button type="button" class="primary-wide decision-apply-button" id="applyDecisionToPortfolio">应用到模拟盘</button>` : ""}
     ${portfolio ? detailSection(
@@ -1590,6 +1921,7 @@ async function applySelectedDecision() {
     showOutput(payload);
     await refreshPortfolios({ silent: true });
     await refreshDecisions();
+    await refreshEvaluation();
   } catch (err) {
     showOutput(err);
     row.application = {
@@ -1656,6 +1988,7 @@ async function runGemini() {
     await refreshGeminiUsage();
     await refreshNewsSignals({ silent: true });
     await refreshPortfolios({ silent: true });
+    await refreshEvaluation();
     await refreshAccount();
     await refreshPositions();
   } catch (err) {
@@ -1743,11 +2076,13 @@ async function createPortfolio() {
     el("portfolioName").value = "";
     renderPortfolios(payload);
     renderDecisionPortfolioOptions({ followActive: true });
+    renderEvaluationPortfolioOptions({ followActive: true });
     if (state.activeTab === "decisions") {
       state.decisionPage = 1;
       state.selectedDecisionIndex = null;
       await refreshDecisions();
     }
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1763,11 +2098,13 @@ async function setActivePortfolio(portfolioId) {
     });
     renderPortfolios(payload);
     renderDecisionPortfolioOptions({ followActive: true });
+    renderEvaluationPortfolioOptions({ followActive: true });
     if (state.activeTab === "decisions") {
       state.decisionPage = 1;
       state.selectedDecisionIndex = null;
       await refreshDecisions();
     }
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1784,11 +2121,13 @@ async function deletePortfolio(portfolioId) {
       body: JSON.stringify({ portfolio_id: portfolioId }),
     });
     renderPortfolios(payload);
+    renderEvaluationPortfolioOptions({ followActive: true });
     if (state.activeTab === "decisions") {
       state.decisionPage = 1;
       state.selectedDecisionIndex = null;
       await refreshDecisions();
     }
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1813,6 +2152,7 @@ async function savePortfolioCash() {
       }),
     });
     renderPortfolios(payload);
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1832,6 +2172,7 @@ async function updateActivePortfolioMode() {
       }),
     });
     renderPortfolios(payload);
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1853,6 +2194,8 @@ async function cloneActivePortfolio(mode) {
     });
     renderPortfolios(payload);
     renderDecisionPortfolioOptions({ followActive: true });
+    renderEvaluationPortfolioOptions({ followActive: true });
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1887,6 +2230,7 @@ async function savePortfolioPosition() {
     el("portfolioPositionCost").value = "1";
     el("portfolioPositionNote").value = "";
     renderPortfolios(payload);
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1929,6 +2273,7 @@ async function recordPortfolioTrade() {
     el("portfolioTradePrice").value = "1";
     el("portfolioTradeReason").value = "";
     renderPortfolios(payload.portfolio_payload || payload);
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -1957,6 +2302,7 @@ async function deletePortfolioPosition(code) {
       body: JSON.stringify({ portfolio_id: state.activePortfolioId, code }),
     });
     renderPortfolios(payload);
+    await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
@@ -2017,6 +2363,7 @@ function bindButtons() {
   });
   el("refreshPositions").addEventListener("click", refreshPositions);
   el("refreshDecisions").addEventListener("click", refreshDecisions);
+  el("refreshEvaluation").addEventListener("click", refreshEvaluation);
   el("decisionPortfolio").addEventListener("change", () => {
     state.decisionPortfolioId = el("decisionPortfolio").value;
     state.decisionPage = 1;
@@ -2053,6 +2400,12 @@ function bindButtons() {
     state.selectedDecisionIndex = null;
     refreshDecisions();
   });
+  el("evaluationPortfolio").addEventListener("change", () => {
+    state.evaluationPortfolioId = el("evaluationPortfolio").value;
+    refreshEvaluation();
+  });
+  el("evaluationStart").addEventListener("change", refreshEvaluation);
+  el("evaluationEnd").addEventListener("change", refreshEvaluation);
   el("refreshGeminiUsage").addEventListener("click", refreshGeminiUsage);
   el("refreshNewsSignals").addEventListener("click", () => refreshNewsSignals());
   el("newsSearch").addEventListener("input", () => {
@@ -2126,6 +2479,7 @@ async function init() {
   await refreshAccount();
   await refreshPositions();
   await refreshDecisions();
+  await refreshEvaluation();
   await refreshGeminiUsage();
   await refreshNewsSignals({ silent: true });
   state.myWatchlistTimer = window.setInterval(() => refreshMyWatchlist({ silent: true }), 20000);

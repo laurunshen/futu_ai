@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig, PROJECT_ROOT
+from .evaluation import build_decision_review_baseline
 from .futu_client import FutuPaperClient
 from .futu_sync import apply_order_with_optional_futu_sync
 from .gemini_engine import GeminiDecisionEngine, GeminiTradeDecision
@@ -44,6 +45,7 @@ class AutoTradeResult:
     log_path: str
     source: str = "futu_simulate"
     portfolio: dict[str, Any] | None = None
+    review: dict[str, Any] | None = None
 
 
 def _clean(value: Any) -> Any:
@@ -120,6 +122,7 @@ class AutoTrader:
             application=None,
             blocked_reasons=blocked,
             log_path="",
+            review=None,
         )
         log_path = self._append_log(result)
         return AutoTradeResult(**{**asdict(result), "log_path": str(log_path)})
@@ -267,6 +270,16 @@ class AutoTrader:
                 "position_count": len(positions),
             },
         )
+        review = build_decision_review_baseline(
+            portfolio=portfolio,
+            positions=positions,
+            candidates=candidates,
+            decision=decision.to_dict(),
+            order=order.to_dict() if order else None,
+            fx_payload=fx_payload,
+            news_signals=[dict(signal) for signal in (news_payload.get("signals") or [])],
+        )
+        result = AutoTradeResult(**{**asdict(result), "review": review})
         log_path = self._append_log(result)
         return AutoTradeResult(**{**asdict(result), "log_path": str(log_path)})
 

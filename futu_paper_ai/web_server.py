@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from .auto_trader import AutoTrader
 from .chat_engine import run_ai_chat
 from .config import AppConfig, PROJECT_ROOT, public_config, save_runtime_risk_config
+from .evaluation import build_evaluation_payload, collect_evaluation_codes, decision_evaluation_id
 from .futu_client import FutuPaperClient, _load_futu
 from .futu_sync import apply_order_with_optional_futu_sync, refresh_futu_sync_orders
 from .models import OrderIntent
@@ -108,6 +109,7 @@ def _read_decisions(limit: int) -> list[dict[str, Any]]:
                 continue
             if isinstance(entry, dict):
                 entry.setdefault("log_date", log_path.stem)
+                entry.setdefault("evaluation_id", decision_evaluation_id(entry))
                 entries.append(entry)
     return list(reversed(entries))
 
@@ -151,6 +153,7 @@ def _read_decisions_page(
                     if str(entry_portfolio.get("id") or "") != portfolio_id:
                         continue
                 entry.setdefault("log_date", log_date)
+                entry.setdefault("evaluation_id", decision_evaluation_id(entry))
                 entries.append(entry)
 
     entries.sort(key=lambda item: str(item.get("timestamp") or item.get("ts") or ""), reverse=True)
@@ -169,6 +172,45 @@ def _read_decisions_page(
     }
 
 
+def _read_decisions_filtered(
+    *,
+    limit: int = 500,
+    date_start: str = "",
+    date_end: str = "",
+    portfolio_id: str = "",
+) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 1000))
+    portfolio_id = str(portfolio_id or "").strip()
+    entries: list[dict[str, Any]] = []
+
+    if DECISION_LOG_ROOT.exists():
+        for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl")):
+            log_date = log_path.stem
+            if date_start and log_date < date_start:
+                continue
+            if date_end and log_date > date_end:
+                continue
+            for line in log_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if portfolio_id and portfolio_id != "ALL":
+                    entry_portfolio = entry.get("portfolio") or {}
+                    if str(entry_portfolio.get("id") or "") != portfolio_id:
+                        continue
+                entry.setdefault("log_date", log_date)
+                entry.setdefault("evaluation_id", decision_evaluation_id(entry))
+                entries.append(entry)
+
+    entries.sort(key=lambda item: str(item.get("timestamp") or item.get("ts") or ""), reverse=True)
+    return entries[:limit]
+
+
 def _read_decisions_for_date(date_text: str) -> list[dict[str, Any]]:
     log_path = DECISION_LOG_ROOT / f"{date_text}.jsonl"
     if not log_path.exists():
@@ -183,6 +225,7 @@ def _read_decisions_for_date(date_text: str) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(entry, dict):
+            entry.setdefault("evaluation_id", decision_evaluation_id(entry))
             entries.append(entry)
     return entries
 
@@ -395,6 +438,31 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                         date_start=date_start,
                         date_end=date_end,
                         portfolio_id=portfolio_id,
+                    )
+                )
+            elif path == "/api/evaluation":
+                limit = self._query_int(query, "limit", 500)
+                date_start = self._query_one(query, "date_start", "")
+                date_end = self._query_one(query, "date_end", "")
+                portfolio_id = self._query_one(query, "portfolio_id", "")
+                store = load_portfolios()
+                entries = _read_decisions_filtered(
+                    limit=limit,
+                    date_start=date_start,
+                    date_end=date_end,
+                    portfolio_id=portfolio_id,
+                )
+                codes = collect_evaluation_codes(store.get("portfolios", []), entries)
+                quote_by_code, quote_error = self._quote_map(codes)
+                fx_payload = self.client.fx_rates_to_hkd()
+                self._send_json(
+                    build_evaluation_payload(
+                        portfolios=store.get("portfolios", []),
+                        entries=entries,
+                        quote_by_code=quote_by_code,
+                        fx_payload=fx_payload,
+                        quote_error=quote_error,
+                        portfolio_id="" if portfolio_id == "ALL" else portfolio_id,
                     )
                 )
             elif path == "/api/gemini-usage":

@@ -21,6 +21,7 @@
     <nav class="tabbar" aria-label="工作区">
       <button type="button" class="tab-button active" data-tab="portfolio" aria-selected="true">模拟盘</button>
       <button type="button" class="tab-button" data-tab="decisions" aria-selected="false">AI 决策</button>
+      <button type="button" class="tab-button" data-tab="evaluation" aria-selected="false">评估</button>
       <button type="button" class="tab-button" data-tab="market" aria-selected="false">行情</button>
       <button type="button" class="tab-button" data-tab="news" aria-selected="false">新闻</button>
       <button type="button" class="tab-button" data-tab="chat" aria-selected="false">AI 对话</button>
@@ -404,6 +405,44 @@
               <div class="empty">未选择决策</div>
             </div>
           </aside>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="evaluation">
+        <div class="tab-grid">
+          <aside class="panel span-4">
+            <div class="panel-head">
+              <h2>策略评估</h2>
+              <button class="icon-button" id="refreshEvaluation" title="刷新评估" aria-label="刷新评估">↻</button>
+            </div>
+            <div class="evaluation-tools">
+              <select id="evaluationPortfolio" aria-label="评估模拟盘">
+                <option value="ALL">全部模拟盘</option>
+              </select>
+              <input id="evaluationStart" type="date" aria-label="开始日期">
+              <input id="evaluationEnd" type="date" aria-label="结束日期">
+            </div>
+            <div class="evaluation-summary" id="evaluationSummary"></div>
+          </aside>
+
+          <div class="panel span-8">
+            <div class="panel-head">
+              <h2>收益曲线</h2>
+              <span class="detail-status" id="evaluationStatus">待刷新</span>
+            </div>
+            <div class="equity-chart-wrap">
+              <canvas id="equityChart" width="900" height="260" aria-label="收益曲线"></canvas>
+            </div>
+            <div class="equity-legend" id="equityLegend"></div>
+          </div>
+
+          <div class="panel span-12">
+            <div class="panel-head">
+              <h2>AI 决策后表现</h2>
+              <span class="pill">1D · 3D · 7D</span>
+            </div>
+            <div class="decision-tracking-list" id="decisionTrackingList"></div>
+          </div>
         </div>
       </section>
 
