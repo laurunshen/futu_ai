@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from .futu_client import FutuPaperClient
 from .gemini_engine import GeminiDecisionEngine, GeminiTradeDecision
 from .models import OrderIntent, infer_market
 from .news_signals import load_news_signals
-from .portfolios import load_portfolios
+from .portfolios import apply_order_to_portfolio, load_portfolios
 from .watchlist import WatchItem, load_watchlist
 
 
@@ -24,6 +25,7 @@ LOG_DIR = PROJECT_ROOT / "data" / "decisions"
 class AutoTradeResult:
     ok: bool
     mode: str
+    decision_id: str
     decision: dict[str, Any]
     gemini_usage: dict[str, Any]
     news_notes: list[str]
@@ -31,6 +33,7 @@ class AutoTradeResult:
     candidates: list[dict[str, Any]]
     order: dict[str, Any] | None
     execution: dict[str, Any] | None
+    application: dict[str, Any] | None
     blocked_reasons: list[str]
     log_path: str
     source: str = "futu_simulate"
@@ -100,6 +103,7 @@ class AutoTrader:
         result = AutoTradeResult(
             ok=not blocked and (execution is None or bool(execution.get("ok"))),
             mode="execute" if execute else "dry_run",
+            decision_id=self._new_decision_id(),
             decision=decision.to_dict(),
             gemini_usage=self.engine.last_usage,
             news_notes=news_notes,
@@ -107,6 +111,7 @@ class AutoTrader:
             candidates=candidates,
             order=order.to_dict() if order else None,
             execution=execution,
+            application=None,
             blocked_reasons=blocked,
             log_path="",
         )
@@ -146,6 +151,8 @@ class AutoTrader:
             "name": portfolio.get("name"),
             "base_currency": portfolio.get("base_currency"),
             "cash": portfolio.get("cash", 0),
+            "cash_by_currency": portfolio.get("cash_by_currency", {}),
+            "apply_mode": portfolio.get("apply_mode", "manual"),
             "position_count": len(positions),
             "price_rule": "Current prices are only from Futu OpenD snapshots attached to positions/candidates.",
         }
@@ -172,9 +179,8 @@ class AutoTrader:
         news_notes = [str(note) for note in notes]
         if news_payload.get("ok"):
             news_notes.extend(str(note) for note in news_payload.get("notes") or [])
-        news_notes.append(
-            "本轮是本地模拟盘决策，不会自动修改本地持仓，也不会提交富途订单。"
-        )
+        apply_mode = str(portfolio.get("apply_mode") or "manual").lower()
+        news_notes.append(f"本轮是本地模拟盘决策；当前模拟盘应用模式={apply_mode}；不会提交富途订单。")
 
         decision = self.engine.decide(candidates=candidates, positions=positions, account=account, notes=news_notes)
         order, blocked = self._build_order(decision, positions)
@@ -186,10 +192,19 @@ class AutoTrader:
                 "message": "Local portfolio decision only; no Futu order submitted.",
                 "intent": order.to_dict(),
             }
+        decision_id = self._new_decision_id()
+        application = self._portfolio_application(
+            portfolio=portfolio,
+            order=order.to_dict() if order else None,
+            blocked=blocked,
+            decision_id=decision_id,
+            reason=decision.reason,
+        )
 
         result = AutoTradeResult(
-            ok=not blocked,
+            ok=not blocked and (application is None or bool(application.get("ok", True))),
             mode="portfolio_decision",
+            decision_id=decision_id,
             decision=decision.to_dict(),
             gemini_usage=self.engine.last_usage,
             news_notes=news_notes,
@@ -197,6 +212,7 @@ class AutoTrader:
             candidates=candidates,
             order=order.to_dict() if order else None,
             execution=execution,
+            application=application,
             blocked_reasons=blocked,
             log_path="",
             source="local_portfolio",
@@ -205,11 +221,68 @@ class AutoTrader:
                 "name": portfolio.get("name"),
                 "base_currency": portfolio.get("base_currency"),
                 "cash": portfolio.get("cash", 0),
+                "cash_by_currency": portfolio.get("cash_by_currency", {}),
+                "apply_mode": apply_mode,
                 "position_count": len(positions),
             },
         )
         log_path = self._append_log(result)
         return AutoTradeResult(**{**asdict(result), "log_path": str(log_path)})
+
+    def _new_decision_id(self) -> str:
+        return uuid.uuid4().hex[:12]
+
+    def _portfolio_application(
+        self,
+        *,
+        portfolio: dict[str, Any],
+        order: dict[str, Any] | None,
+        blocked: list[str],
+        decision_id: str,
+        reason: str,
+    ) -> dict[str, Any] | None:
+        mode = str(portfolio.get("apply_mode") or "manual").strip().lower()
+        if mode not in {"observe", "manual", "auto"}:
+            mode = "manual"
+        if not order:
+            return {"ok": True, "status": "not_applicable", "mode": mode, "message": "No local order generated."}
+        if blocked:
+            return {
+                "ok": False,
+                "status": "blocked",
+                "mode": mode,
+                "message": "; ".join(blocked),
+            }
+        if mode == "observe":
+            return {
+                "ok": True,
+                "status": "skipped",
+                "mode": mode,
+                "message": "Observe-only portfolio; decision was not applied.",
+            }
+        if mode == "manual":
+            return {
+                "ok": True,
+                "status": "pending",
+                "mode": mode,
+                "message": "Manual portfolio; waiting for user approval.",
+            }
+        try:
+            applied = apply_order_to_portfolio(
+                str(portfolio.get("id") or ""),
+                order,
+                source="auto",
+                decision_id=decision_id,
+                reason=reason,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "failed",
+                "mode": mode,
+                "message": str(exc),
+            }
+        return {**applied, "mode": mode}
 
     def loop(self, execute: bool | None = None) -> None:
         interval = max(30, self.config.gemini.loop_interval_seconds)

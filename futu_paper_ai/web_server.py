@@ -20,12 +20,15 @@ from .futu_client import FutuPaperClient, _load_futu
 from .models import OrderIntent
 from .news_signals import load_news_signals
 from .portfolios import (
+    apply_order_to_portfolio,
+    clone_portfolio,
     create_portfolio,
     delete_portfolio,
     delete_position,
     load_portfolios,
     set_active_portfolio,
     update_portfolio_cash,
+    update_portfolio_settings,
     upsert_position,
 )
 from .watchlist import add_user_watch, load_user_watchlist, load_watchlist, remove_user_watch
@@ -181,6 +184,49 @@ def _read_decisions_for_date(date_text: str) -> list[dict[str, Any]]:
         if isinstance(entry, dict):
             entries.append(entry)
     return entries
+
+
+def _find_decision(decision_id: str) -> dict[str, Any] | None:
+    decision_id = str(decision_id or "").strip()
+    if not decision_id or not DECISION_LOG_ROOT.exists():
+        return None
+    for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl"), reverse=True):
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict) and str(entry.get("decision_id") or "") == decision_id:
+                entry.setdefault("log_date", log_path.stem)
+                return entry
+    return None
+
+
+def _mark_decision_application(decision_id: str, application: dict[str, Any]) -> bool:
+    decision_id = str(decision_id or "").strip()
+    if not decision_id or not DECISION_LOG_ROOT.exists():
+        return False
+    for log_path in sorted(DECISION_LOG_ROOT.glob("*.jsonl"), reverse=True):
+        changed = False
+        next_lines: list[str] = []
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                next_lines.append(line)
+                continue
+            if isinstance(entry, dict) and str(entry.get("decision_id") or "") == decision_id:
+                entry["application"] = _jsonable(application)
+                changed = True
+            next_lines.append(json.dumps(entry, ensure_ascii=False) if isinstance(entry, dict) else line)
+        if changed:
+            log_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+            return True
+    return False
 
 
 def _num(value: Any) -> int:
@@ -410,11 +456,25 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     cash=_float(payload.get("cash", 0)),
                 )
                 self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/clone":
+                store = clone_portfolio(
+                    str(payload.get("portfolio_id", "")).strip() or None,
+                    name=str(payload.get("name", "")).strip(),
+                    apply_mode=str(payload.get("apply_mode", "")).strip() or None,
+                )
+                self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/delete":
                 store = delete_portfolio(str(payload.get("portfolio_id", "")).strip())
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/active":
                 store = set_active_portfolio(str(payload.get("portfolio_id", "")).strip())
+                self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/settings":
+                store = update_portfolio_settings(
+                    str(payload.get("portfolio_id", "")).strip() or None,
+                    apply_mode=str(payload.get("apply_mode", "")).strip() or None,
+                    futu_sync_enabled=bool(payload["futu_sync_enabled"]) if "futu_sync_enabled" in payload else None,
+                )
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/cash":
                 store = update_portfolio_cash(
@@ -431,6 +491,33 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     str(payload.get("code", "")).strip(),
                 )
                 self._send_json(self._portfolio_payload(store))
+            elif path == "/api/decisions/apply":
+                decision_id = str(payload.get("decision_id", "")).strip()
+                if not decision_id:
+                    raise ValueError("decision_id is required")
+                entry = _find_decision(decision_id) or {}
+                existing_application = entry.get("application") if isinstance(entry.get("application"), dict) else {}
+                if existing_application.get("status") in {"applied", "already_applied"}:
+                    self._send_json({"ok": True, "application": existing_application, "portfolio_payload": self._portfolio_payload()})
+                    return
+                order = payload.get("order") or entry.get("order")
+                if not isinstance(order, dict):
+                    raise ValueError("decision has no order to apply")
+                portfolio_id = str(payload.get("portfolio_id", "")).strip()
+                if not portfolio_id:
+                    portfolio_id = str((entry.get("portfolio") or {}).get("id") or "").strip()
+                if not portfolio_id:
+                    raise ValueError("portfolio_id is required")
+                decision = entry.get("decision") if isinstance(entry.get("decision"), dict) else {}
+                application = apply_order_to_portfolio(
+                    portfolio_id,
+                    order,
+                    source="manual",
+                    decision_id=decision_id,
+                    reason=str(decision.get("reason") or order.get("reason") or ""),
+                )
+                _mark_decision_application(decision_id, application)
+                self._send_json({"ok": bool(application.get("ok", True)), "application": application, "portfolio_payload": self._portfolio_payload()})
             elif path == "/api/my-watchlist/add":
                 code = str(payload.get("code", "")).strip().upper()
                 if not code:

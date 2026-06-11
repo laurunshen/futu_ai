@@ -424,13 +424,32 @@ textarea {
   align-items: end;
 }
 
+.portfolio-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
 .portfolio-cash-editor label {
   color: var(--muted);
   font-size: 12px;
 }
 
-.portfolio-cash-editor input {
+.portfolio-settings label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.portfolio-cash-editor input,
+.portfolio-settings select {
   margin-top: 5px;
+}
+
+.portfolio-clone-actions {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 8px;
 }
 
 .position-form {
@@ -1626,6 +1645,12 @@ pre {
 
   .portfolio-create-grid {
     grid-template-columns: 1fr;
+  }
+
+  .portfolio-settings,
+  .portfolio-clone-actions {
+    grid-template-columns: 1fr;
+    grid-auto-flow: row;
   }
 
   .portfolio-position-price {

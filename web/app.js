@@ -344,6 +344,27 @@ function activePortfolio() {
   return state.portfolios.find((portfolio) => portfolio.id === state.activePortfolioId) || state.portfolios[0] || null;
 }
 
+function applyModeLabel(mode) {
+  return {
+    observe: "仅观察",
+    manual: "手动应用",
+    auto: "自动应用",
+  }[String(mode || "manual").toLowerCase()] || "手动应用";
+}
+
+function applicationLabel(application) {
+  const status = String(application?.status || "").toLowerCase();
+  return {
+    pending: "待手动应用",
+    applied: "已应用",
+    already_applied: "已应用",
+    skipped: "仅观察",
+    blocked: "已阻止",
+    failed: "应用失败",
+    not_applicable: "无需应用",
+  }[status] || "未生成应用状态";
+}
+
 function renderChatPortfolioOptions() {
   const select = el("chatPortfolio");
   if (!select) return;
@@ -389,7 +410,7 @@ function renderPortfolios(payload) {
         <article class="portfolio-item ${active ? "active" : ""}">
           <button type="button" class="portfolio-main" data-portfolio-active="${html(portfolio.id)}">
             <span class="portfolio-name">${html(portfolio.name)}</span>
-            <span class="portfolio-meta">${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
+            <span class="portfolio-meta">${html(applyModeLabel(portfolio.apply_mode))} · ${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
           </button>
           <button type="button" class="portfolio-delete" data-portfolio-delete="${html(portfolio.id)}" title="删除模拟盘" aria-label="删除 ${html(portfolio.name)}">×</button>
         </article>
@@ -424,6 +445,24 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     return;
   }
   const totals = Object.entries(portfolio.totals_by_currency || {});
+  const cashRows = Object.entries(portfolio.cash_by_currency || {});
+  const cashCards = cashRows.length
+    ? cashRows
+        .map(
+          ([currency, value]) => `
+            <div class="metric">
+              <div class="metric-label">Cash ${html(currency)}</div>
+              <div class="metric-value">${html(fmt(value || 0))}</div>
+            </div>
+          `
+        )
+        .join("")
+    : `
+      <div class="metric">
+        <div class="metric-label">Cash ${html(portfolio.base_currency)}</div>
+        <div class="metric-value">${html(fmt(portfolio.cash || 0))}</div>
+      </div>
+    `;
   const totalCards = totals.length
     ? totals
         .map(([currency, row]) => {
@@ -441,10 +480,7 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     : `<div class="metric"><div class="metric-label">Positions</div><div class="metric-value">0</div></div>`;
   target.innerHTML = `
     <div class="metric-grid">
-      <div class="metric">
-        <div class="metric-label">Cash ${html(portfolio.base_currency)}</div>
-        <div class="metric-value">${html(fmt(portfolio.cash || 0))}</div>
-      </div>
+      ${cashCards}
       ${totalCards}
     </div>
     <div class="portfolio-cash-editor">
@@ -454,9 +490,27 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
       </label>
       <button type="button" class="secondary compact" id="savePortfolioCash">保存现金</button>
     </div>
+    <div class="portfolio-settings">
+      <label>
+        AI 应用模式
+        <select id="activePortfolioMode">
+          <option value="observe" ${portfolio.apply_mode === "observe" ? "selected" : ""}>仅观察</option>
+          <option value="manual" ${!portfolio.apply_mode || portfolio.apply_mode === "manual" ? "selected" : ""}>手动应用</option>
+          <option value="auto" ${portfolio.apply_mode === "auto" ? "selected" : ""}>自动应用</option>
+        </select>
+      </label>
+      <div class="portfolio-clone-actions">
+        <button type="button" class="secondary compact" data-clone-mode="manual">克隆手动盘</button>
+        <button type="button" class="secondary compact" data-clone-mode="auto">克隆自动盘</button>
+      </div>
+    </div>
     ${quoteError ? `<div class="chat-warning">${html(quoteError)}</div>` : ""}
   `;
   el("savePortfolioCash")?.addEventListener("click", savePortfolioCash);
+  el("activePortfolioMode")?.addEventListener("change", updateActivePortfolioMode);
+  target.querySelectorAll("[data-clone-mode]").forEach((button) => {
+    button.addEventListener("click", () => cloneActivePortfolio(button.dataset.cloneMode));
+  });
   el("activePortfolioCash")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -1086,11 +1140,20 @@ function renderDecisionDetail(row) {
   const blocked = Array.isArray(row.blocked_reasons) ? row.blocked_reasons : [];
   const order = row.order || null;
   const execution = row.execution || null;
+  const application = row.application || null;
   const usage = row.gemini_usage || {};
   const portfolio = row.portfolio || null;
   const newsNotes = Array.isArray(row.news_notes) ? row.news_notes : [];
   const newsSignals = Array.isArray(row.news_signals) ? row.news_signals : [];
   const outputTokens = (Number(usage.candidates_token_count) || 0) + (Number(usage.thoughts_token_count) || 0);
+  const applicationStatus = String(application?.status || "").toLowerCase();
+  const canApplyDecision = Boolean(
+    row.decision_id &&
+      order &&
+      portfolio?.id &&
+      !blocked.length &&
+      !["applied", "already_applied"].includes(applicationStatus)
+  );
 
   status.className = `detail-status ${html(action)}`;
   status.textContent = `${decision.action || "UNKNOWN"} · ${fmt(decision.confidence)}%`;
@@ -1145,6 +1208,16 @@ function renderDecisionDetail(row) {
           ])
         : detailText("未执行")
     )}
+    ${detailSection(
+      "应用状态",
+      detailKvGrid([
+        ["状态", applicationLabel(application)],
+        ["模式", application?.mode],
+        ["消息", application?.message],
+        ["流水", application?.trade ? `${application.trade.side} ${application.trade.qty} ${application.trade.code} @ ${application.trade.price}` : ""],
+      ])
+    )}
+    ${canApplyDecision ? `<button type="button" class="primary-wide decision-apply-button" id="applyDecisionToPortfolio">应用到模拟盘</button>` : ""}
     ${portfolio ? detailSection(
       "模拟盘",
       detailKvGrid([
@@ -1166,6 +1239,7 @@ function renderDecisionDetail(row) {
     )}
     ${decision.learning_note ? `<div class="detail-note">${html(decision.learning_note)}</div>` : ""}
   `;
+  el("applyDecisionToPortfolio")?.addEventListener("click", applySelectedDecision);
 }
 
 function selectDecision(index, { scroll = false } = {}) {
@@ -1219,6 +1293,7 @@ function renderDecisions(rows) {
           <p class="decision-reason">${html(decision.reason)}</p>
           <div class="decision-meta">
             <span>${html(executionLabel(row))}</span>
+            ${row.application || row.order ? `<span>${html(applicationLabel(row.application))}</span>` : ""}
             ${row.order ? `<span>${html(row.order.side)} ${html(row.order.qty)} @ ${html(row.order.price)}</span>` : ""}
           </div>
           ${candidates ? `<div class="candidate-row">${candidates}</div>` : ""}
@@ -1246,6 +1321,32 @@ function renderDecisionPager(payload) {
   el("decisionPageInfo").textContent = `${page} / ${totalPages} · ${total}`;
   el("prevDecisionPage").disabled = page <= 1;
   el("nextDecisionPage").disabled = page >= totalPages;
+}
+
+async function applySelectedDecision() {
+  const row = state.decisionEntries[state.selectedDecisionIndex];
+  if (!row?.decision_id || !row.order || !row.portfolio?.id) return;
+  try {
+    const payload = await api("/api/decisions/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        decision_id: row.decision_id,
+        portfolio_id: row.portfolio.id,
+        order: row.order,
+      }),
+    });
+    showOutput(payload);
+    await refreshPortfolios({ silent: true });
+    await refreshDecisions();
+  } catch (err) {
+    showOutput(err);
+    row.application = {
+      ok: false,
+      status: "failed",
+      message: err?.error || err?.message || "应用失败",
+    };
+    renderDecisionDetail(row);
+  }
 }
 
 function currentIntent() {
@@ -1456,6 +1557,44 @@ async function savePortfolioCash() {
       body: JSON.stringify({ portfolio_id: state.activePortfolioId, cash }),
     });
     renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function updateActivePortfolioMode() {
+  if (!state.activePortfolioId) return;
+  try {
+    const payload = await api("/api/portfolios/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        portfolio_id: state.activePortfolioId,
+        apply_mode: el("activePortfolioMode").value,
+      }),
+    });
+    renderPortfolios(payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function cloneActivePortfolio(mode) {
+  const portfolio = activePortfolio();
+  if (!portfolio) return;
+  const suffix = mode === "auto" ? "Auto" : "Manual";
+  try {
+    const payload = await api("/api/portfolios/clone", {
+      method: "POST",
+      body: JSON.stringify({
+        portfolio_id: portfolio.id,
+        name: `${portfolio.name} - ${suffix}`,
+        apply_mode: mode,
+      }),
+    });
+    renderPortfolios(payload);
+    renderDecisionPortfolioOptions({ followActive: true });
     showOutput(payload);
   } catch (err) {
     showOutput(err);

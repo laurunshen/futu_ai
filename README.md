@@ -79,6 +79,13 @@ review, portfolio-manager summary, and missing data. The executor still reads
 only the strict BUY / SELL / HOLD fields and applies the same paper-only risk
 checks.
 
+Local portfolios can be used for AB tests before syncing anything to Futu.
+Each portfolio has an AI application mode: `observe` only records decisions,
+`manual` waits for the user to apply an AI order from the decision detail page,
+and `auto` applies risk-approved AI orders to the local portfolio ledger. Local
+applications update `data/state/portfolios.json`, write a trade record, and do
+not submit Futu orders.
+
 Candidate selection is two-stage:
 
 1. Rank the 100-code watchlist by market activity:
