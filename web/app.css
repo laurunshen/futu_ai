@@ -446,6 +446,18 @@ textarea {
   margin-top: 5px;
 }
 
+.portfolio-cash-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 5px;
+}
+
+.portfolio-cash-row input,
+.portfolio-cash-row select {
+  margin-top: 0;
+}
+
 .portfolio-clone-actions {
   display: grid;
   grid-auto-flow: column;
@@ -1648,6 +1660,7 @@ pre {
   }
 
   .portfolio-settings,
+  .portfolio-cash-row,
   .portfolio-clone-actions {
     grid-template-columns: 1fr;
     grid-auto-flow: row;

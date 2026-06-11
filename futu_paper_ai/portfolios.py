@@ -296,17 +296,18 @@ def update_portfolio_settings(
     raise ValueError("portfolio not found")
 
 
-def update_portfolio_cash(portfolio_id: str | None, cash: Any) -> dict[str, Any]:
+def update_portfolio_cash(portfolio_id: str | None, cash: Any, *, currency: str | None = None) -> dict[str, Any]:
     store = load_portfolios()
     target_id = str(portfolio_id or store["active_id"])
     for portfolio in store["portfolios"]:
         if portfolio["id"] != target_id:
             continue
         base_currency = str(portfolio.get("base_currency") or "HKD").upper()
+        target_currency = str(currency or base_currency).strip().upper() or base_currency
         next_cash = max(0.0, _num(cash, 0))
         cash_by_currency = dict(portfolio.get("cash_by_currency") or {})
-        cash_by_currency[base_currency] = next_cash
-        portfolio["cash"] = next_cash
+        cash_by_currency[target_currency] = next_cash
+        portfolio["cash"] = _num(cash_by_currency.get(base_currency), 0)
         portfolio["cash_by_currency"] = cash_by_currency
         portfolio["updated_at"] = _now()
         store["active_id"] = target_id

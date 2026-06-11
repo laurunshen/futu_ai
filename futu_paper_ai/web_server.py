@@ -480,6 +480,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 store = update_portfolio_cash(
                     str(payload.get("portfolio_id", "")).strip() or None,
                     payload.get("cash", 0),
+                    currency=str(payload.get("currency", "")).strip() or None,
                 )
                 self._send_json(self._portfolio_payload(store))
             elif path == "/api/portfolios/position":

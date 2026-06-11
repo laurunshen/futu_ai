@@ -445,7 +445,10 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     return;
   }
   const totals = Object.entries(portfolio.totals_by_currency || {});
-  const cashRows = Object.entries(portfolio.cash_by_currency || {});
+  const cashByCurrency = portfolio.cash_by_currency || {};
+  const cashRows = Object.entries(cashByCurrency);
+  const cashCurrencies = Array.from(new Set([portfolio.base_currency, ...Object.keys(cashByCurrency), "HKD", "USD", "CNY"].filter(Boolean)));
+  const selectedCashCurrency = portfolio.base_currency || cashCurrencies[0] || "HKD";
   const cashCards = cashRows.length
     ? cashRows
         .map(
@@ -485,8 +488,13 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     </div>
     <div class="portfolio-cash-editor">
       <label>
-        模拟现金 ${html(portfolio.base_currency)}
-        <input id="activePortfolioCash" type="number" min="0" step="1" value="${html(portfolio.cash || 0)}">
+        模拟现金
+        <div class="portfolio-cash-row">
+          <select id="activePortfolioCashCurrency" aria-label="现金币种">
+            ${cashCurrencies.map((currency) => `<option value="${html(currency)}" ${currency === selectedCashCurrency ? "selected" : ""}>${html(currency)}</option>`).join("")}
+          </select>
+          <input id="activePortfolioCash" type="number" min="0" step="1" value="${html(cashByCurrency[selectedCashCurrency] ?? 0)}">
+        </div>
       </label>
       <button type="button" class="secondary compact" id="savePortfolioCash">保存现金</button>
     </div>
@@ -507,6 +515,10 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     ${quoteError ? `<div class="chat-warning">${html(quoteError)}</div>` : ""}
   `;
   el("savePortfolioCash")?.addEventListener("click", savePortfolioCash);
+  el("activePortfolioCashCurrency")?.addEventListener("change", () => {
+    const currency = el("activePortfolioCashCurrency").value;
+    el("activePortfolioCash").value = cashByCurrency[currency] ?? 0;
+  });
   el("activePortfolioMode")?.addEventListener("change", updateActivePortfolioMode);
   target.querySelectorAll("[data-clone-mode]").forEach((button) => {
     button.addEventListener("click", () => cloneActivePortfolio(button.dataset.cloneMode));
@@ -1554,7 +1566,11 @@ async function savePortfolioCash() {
   try {
     const payload = await api("/api/portfolios/cash", {
       method: "POST",
-      body: JSON.stringify({ portfolio_id: state.activePortfolioId, cash }),
+      body: JSON.stringify({
+        portfolio_id: state.activePortfolioId,
+        currency: el("activePortfolioCashCurrency")?.value,
+        cash,
+      }),
     });
     renderPortfolios(payload);
     showOutput(payload);

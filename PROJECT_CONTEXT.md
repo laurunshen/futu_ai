@@ -107,7 +107,7 @@ data/state/portfolios.json
 - 新增模拟盘。
 - 删除模拟盘。
 - 设置当前模拟盘。
-- 修改当前模拟盘现金。
+- 修改当前模拟盘现金，支持按 `HKD` / `USD` / `CNY` 分币种维护现金桶。
 - 添加/编辑/删除持仓。
 - 设置 AI 应用模式：`observe` 仅观察、`manual` 手动应用、`auto` 自动应用到本地模拟盘。
 - 克隆当前模拟盘为 Manual/Auto 分支，用于 AB Test。
