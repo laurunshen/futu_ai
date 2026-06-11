@@ -365,6 +365,19 @@ function applicationLabel(application) {
   }[status] || "未生成应用状态";
 }
 
+function renderCashEffects(effects) {
+  const rows = Array.isArray(effects) ? effects : [];
+  if (!rows.length) return "";
+  return rows
+    .map((effect) => {
+      const amount = Number(effect.amount);
+      const sign = Number.isFinite(amount) && amount > 0 ? "+" : "";
+      const target = effect.target_currency ? ` -> ${effect.target_amount} ${effect.target_currency}` : "";
+      return `${sign}${effect.amount} ${effect.currency}${target}`;
+    })
+    .join("；");
+}
+
 function renderChatPortfolioOptions() {
   const select = el("chatPortfolio");
   if (!select) return;
@@ -1227,6 +1240,8 @@ function renderDecisionDetail(row) {
         ["模式", application?.mode],
         ["消息", application?.message],
         ["流水", application?.trade ? `${application.trade.side} ${application.trade.qty} ${application.trade.code} @ ${application.trade.price}` : ""],
+        ["现金变动", renderCashEffects(application?.trade?.cash_effects)],
+        ["换汇", application?.trade?.fx?.source_amount ? `${application.trade.fx.source_amount} ${application.trade.fx.source_currency} -> ${application.trade.fx.target_amount} ${application.trade.fx.target_currency}` : ""],
       ])
     )}
     ${canApplyDecision ? `<button type="button" class="primary-wide decision-apply-button" id="applyDecisionToPortfolio">应用到模拟盘</button>` : ""}

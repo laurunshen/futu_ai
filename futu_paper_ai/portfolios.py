@@ -13,6 +13,7 @@ from .news_signals import normalize_ticker
 PORTFOLIOS_PATH = STATE_ROOT / "portfolios.json"
 DEFAULT_PORTFOLIO_ID = "default"
 APPLY_MODES = {"observe", "manual", "auto"}
+DEFAULT_FX_TO_HKD = {"HKD": 1.0, "USD": 7.8, "CNY": 1.08}
 
 
 def _now() -> str:
@@ -35,6 +36,39 @@ def _num(value: Any, default: float = 0.0) -> float:
 
 def _currency_for_market(market: str) -> str:
     return {"US": "USD", "HK": "HKD", "CN": "CNY"}.get(market.upper(), "USD")
+
+
+def _fx_rates_to_hkd(payload: dict[str, Any] | None = None) -> dict[str, float]:
+    rates = dict(DEFAULT_FX_TO_HKD)
+    raw = (payload or {}).get("fx_to_hkd")
+    if isinstance(raw, dict):
+        for currency, value in raw.items():
+            code = str(currency or "").strip().upper()
+            rate = _num(value, 0)
+            if code and rate > 0:
+                rates[code] = rate
+    return rates
+
+
+def _convert_currency(amount: float, from_currency: str, to_currency: str, rates: dict[str, float]) -> float:
+    source = str(from_currency or "").upper()
+    target = str(to_currency or "").upper()
+    if source == target:
+        return amount
+    source_to_hkd = _num(rates.get(source), 0)
+    target_to_hkd = _num(rates.get(target), 0)
+    if source_to_hkd <= 0 or target_to_hkd <= 0:
+        raise ValueError(f"missing FX rate for {source}->{target}")
+    return amount * source_to_hkd / target_to_hkd
+
+
+def _cash_effect(currency: str, amount: float, reason: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "currency": str(currency or "").upper(),
+        "amount": round(amount, 4),
+        "reason": reason,
+        **{key: value for key, value in extra.items() if value not in {None, ""}},
+    }
 
 
 def _normalize_apply_mode(value: Any) -> str:
@@ -66,6 +100,8 @@ def _normalize_trade(payload: dict[str, Any]) -> dict[str, Any]:
         "currency": str(payload.get("currency") or "").upper(),
         "notional": round(_num(payload.get("notional"), 0), 4),
         "realized_pnl": round(_num(payload.get("realized_pnl"), 0), 4),
+        "cash_effects": list(payload.get("cash_effects") or []),
+        "fx": dict(payload.get("fx") or {}),
         "reason": str(payload.get("reason") or ""),
         "created_at": str(payload.get("created_at") or _now()),
     }
@@ -82,6 +118,7 @@ def _default_store() -> dict[str, Any]:
                 "base_currency": "HKD",
                 "cash": 0.0,
                 "cash_by_currency": {"HKD": 0.0},
+                "fx_to_hkd": dict(DEFAULT_FX_TO_HKD),
                 "apply_mode": "manual",
                 "futu_sync_enabled": False,
                 "positions": [],
@@ -148,6 +185,7 @@ def _normalize_portfolio(payload: dict[str, Any]) -> dict[str, Any]:
         "base_currency": base_currency,
         "cash": round(cash_by_currency.get(base_currency, 0.0), 4),
         "cash_by_currency": {currency: round(value, 4) for currency, value in sorted(cash_by_currency.items())},
+        "fx_to_hkd": {currency: round(value, 6) for currency, value in sorted(_fx_rates_to_hkd(payload).items())},
         "apply_mode": _normalize_apply_mode(payload.get("apply_mode")),
         "futu_sync_enabled": bool(payload.get("futu_sync_enabled", False)),
         "parent_id": str(payload.get("parent_id") or ""),
@@ -215,6 +253,7 @@ def create_portfolio(name: str, *, base_currency: str = "HKD", cash: float = 0.0
         "base_currency": str(base_currency or "HKD").strip().upper(),
         "cash": max(0.0, _num(cash, 0)),
         "cash_by_currency": {str(base_currency or "HKD").strip().upper(): max(0.0, _num(cash, 0))},
+        "fx_to_hkd": dict(DEFAULT_FX_TO_HKD),
         "apply_mode": "manual",
         "futu_sync_enabled": False,
         "positions": [],
@@ -262,6 +301,7 @@ def clone_portfolio(portfolio_id: str | None, *, name: str = "", apply_mode: str
         "base_currency": source.get("base_currency", "HKD"),
         "cash": source.get("cash", 0),
         "cash_by_currency": dict(source.get("cash_by_currency") or {}),
+        "fx_to_hkd": dict(source.get("fx_to_hkd") or DEFAULT_FX_TO_HKD),
         "apply_mode": _normalize_apply_mode(apply_mode or source.get("apply_mode")),
         "futu_sync_enabled": False,
         "parent_id": source.get("id", ""),
@@ -375,18 +415,52 @@ def apply_order_to_portfolio(
             }
 
         currency = _currency_for_market(intent.market)
+        base_currency = str(portfolio.get("base_currency") or "HKD").upper()
+        fx_rates = _fx_rates_to_hkd(portfolio)
         cash_by_currency = dict(portfolio.get("cash_by_currency") or {})
         cash_by_currency.setdefault(currency, 0.0)
         positions = [dict(position) for position in portfolio.get("positions", [])]
         existing = next((position for position in positions if position.get("code") == intent.code), None)
         notional = round(intent.notional, 4)
         realized_pnl = 0.0
+        cash_effects: list[dict[str, Any]] = []
+        fx_detail: dict[str, Any] = {}
 
         if intent.side == "BUY":
             available_cash = _num(cash_by_currency.get(currency), 0)
-            if available_cash + 1e-9 < notional:
-                raise ValueError(f"insufficient {currency} cash: need {notional}, available {available_cash}")
-            cash_by_currency[currency] = round(available_cash - notional, 4)
+            direct_spend = min(available_cash, notional)
+            if direct_spend > 0:
+                cash_by_currency[currency] = round(available_cash - direct_spend, 4)
+                cash_effects.append(_cash_effect(currency, -direct_spend, "trade_currency"))
+            remaining_notional = round(notional - direct_spend, 4)
+            if remaining_notional > 0:
+                if base_currency == currency:
+                    raise ValueError(f"insufficient {currency} cash: need {notional}, available {available_cash}")
+                source_amount = round(_convert_currency(remaining_notional, currency, base_currency, fx_rates), 4)
+                source_cash = _num(cash_by_currency.get(base_currency), 0)
+                if source_cash + 1e-9 < source_amount:
+                    raise ValueError(
+                        f"insufficient buying power: need {remaining_notional} {currency} "
+                        f"({source_amount} {base_currency}), available {source_cash} {base_currency}"
+                    )
+                cash_by_currency[base_currency] = round(source_cash - source_amount, 4)
+                cash_effects.append(
+                    _cash_effect(
+                        base_currency,
+                        -source_amount,
+                        "auto_fx",
+                        target_currency=currency,
+                        target_amount=remaining_notional,
+                    )
+                )
+                fx_detail = {
+                    "source_currency": base_currency,
+                    "target_currency": currency,
+                    "source_amount": source_amount,
+                    "target_amount": remaining_notional,
+                    "rate": round(source_amount / remaining_notional, 6),
+                    "source": "local_default_fx_to_hkd",
+                }
             if existing:
                 old_qty = _num(existing.get("qty"), 0)
                 old_cost = _num(existing.get("cost_price"), 0)
@@ -418,6 +492,7 @@ def apply_order_to_portfolio(
             cash_by_currency.setdefault(position_currency, 0.0)
             realized_pnl = round((intent.price - avg_cost) * intent.qty, 4)
             cash_by_currency[position_currency] = round(_num(cash_by_currency.get(position_currency), 0) + notional, 4)
+            cash_effects.append(_cash_effect(position_currency, notional, "sell_proceeds"))
             remaining_qty = round(old_qty - intent.qty, 4)
             if remaining_qty > 0:
                 existing["qty"] = remaining_qty
@@ -439,12 +514,13 @@ def apply_order_to_portfolio(
             "currency": currency,
             "notional": notional,
             "realized_pnl": realized_pnl,
+            "cash_effects": cash_effects,
+            "fx": fx_detail,
             "reason": reason or intent.reason,
             "created_at": _now(),
         }
         trades.append(trade)
 
-        base_currency = str(portfolio.get("base_currency") or "HKD").upper()
         portfolio["cash_by_currency"] = cash_by_currency
         portfolio["cash"] = round(_num(cash_by_currency.get(base_currency), 0), 4)
         portfolio["positions"] = sorted(positions, key=lambda item: item.get("code", ""))
@@ -473,6 +549,8 @@ def portfolio_context(portfolio_id: str | None = None) -> dict[str, Any]:
             "base_currency": active["base_currency"],
             "cash": active["cash"],
             "cash_by_currency": active.get("cash_by_currency", {}),
+            "fx_to_hkd": active.get("fx_to_hkd", {}),
+            "buying_power_rule": "Local ledger can auto-convert base currency cash for cross-currency simulated buys.",
             "apply_mode": active.get("apply_mode", "manual"),
             "updated_at": active["updated_at"],
         },

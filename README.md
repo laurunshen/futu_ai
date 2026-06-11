@@ -84,7 +84,9 @@ Each portfolio has an AI application mode: `observe` only records decisions,
 `manual` waits for the user to apply an AI order from the decision detail page,
 and `auto` applies risk-approved AI orders to the local portfolio ledger. Local
 applications update `data/state/portfolios.json`, write a trade record, and do
-not submit Futu orders.
+not submit Futu orders. Local buys use broker-like buying power: they spend the
+trade currency first and can auto-convert base-currency cash using the stored
+FX table when the trade currency balance is insufficient.
 
 Candidate selection is two-stage:
 
