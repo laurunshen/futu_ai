@@ -31,13 +31,13 @@ class GeminiTradeDecisionModel(BaseModel):
     rating: Rating = Field(description="Five-tier portfolio rating: BUY, OVERWEIGHT, HOLD, UNDERWEIGHT, or SELL.")
     position_action: PositionAction = Field(description="Portfolio action: ENTER, ADD, HOLD, TRIM, EXIT, or WATCH.")
     confidence: int = Field(ge=0, le=100, description="Decision confidence from 0 to 100.")
-    reason: str = Field(description="Plain-language reason for a beginner.")
+    reason: str = Field(description="Plain-language reason for portfolio review and risk context.")
     evidence: list[str] = Field(description="Concrete observations used for the decision.")
     risk: str = Field(description="What can go wrong with this decision.")
     invalidation: str = Field(description="What would prove the idea wrong.")
     max_notional: float = Field(ge=0, description="Maximum simulated order value to use.")
     time_horizon: str = Field(description="Expected holding horizon.")
-    learning_note: str = Field(description="One educational takeaway for the user.")
+    learning_note: str = Field(description="One concise review takeaway for the user.")
     research: GeminiResearchBriefModel = Field(description="TradingAgents-lite multi-role research brief.")
 
 
@@ -195,9 +195,23 @@ class GeminiDecisionEngine:
         account: dict[str, Any],
         notes: list[str],
     ) -> str:
+        portfolio_kind = str(account.get("portfolio_kind") or "paper").lower()
+        if portfolio_kind == "actual":
+            role_intro = (
+                "你是一个交易复盘与风控助手，正在基于用户的实际仓位镜像做决策建议。\n"
+                "这些持仓代表用户真实券商仓位的本地记录；你必须用实际仓位、仓位镜像、持仓成本、现金和风险暴露来描述，不要称为教学模拟盘。\n"
+            )
+            action_scope = (
+                "系统输出的 BUY/SELL/HOLD 仍是本系统里的记录/模拟执行建议，"
+                "不是对用户真实券商账户的直接投资指令；但风控语气要按真实仓位处理。\n"
+            )
+        else:
+            role_intro = "你是一个交易复盘与风控助手，正在基于模拟实验盘做策略决策。\n"
+            action_scope = "系统输出的 BUY/SELL/HOLD 是模拟实验盘动作，用于策略训练、AB Test 和复盘。\n"
         return (
-            "你是一个模拟盘交易教练，目标是帮助新手学习，而不是追求激进收益。\n"
-            "你只能基于输入的行情、账户、持仓和消息做判断；没有足够证据时必须 HOLD。\n"
+            role_intro
+            + action_scope
+            + "你只能基于输入的行情、账户、持仓和消息做判断；没有足够证据时必须 HOLD。\n"
             "输出必须是 JSON，字段符合 schema。\n\n"
             "决策流程：\n"
             "- 使用 TradingAgents-lite 模式：在一次响应里模拟一个小型研究小组，但不要编造任何外部事实。\n"
@@ -212,7 +226,8 @@ class GeminiDecisionEngine:
             "- position_action 用 ENTER/ADD/HOLD/TRIM/EXIT/WATCH 表达组合层动作。\n"
             "- missing_data 写出限制置信度的缺失信息，例如当前价缺失、财报缺失、相关新闻缺失。\n\n"
             "硬规则：\n"
-            "- 这是模拟盘，但也要当作真实训练处理。\n"
+            "- 如果 account.portfolio_kind=actual，必须把组合称为实际仓位或实际仓位镜像；不得写“模拟盘教学”“新手教学盘”等容易误导的表述。\n"
+            "- 如果 account.portfolio_kind=paper，才可以称为模拟实验盘；但也要按严肃风控处理。\n"
             "- 不要编造新闻、财报、宏观事件或价格数据。\n"
             "- 如果没有消息源，只能使用快照中的价格、成交量、振幅、买卖价、资金和持仓。\n"
             "- 当前常规价只能来自候选行情或持仓上下文里的 last_price/bid_price/ask_price/update_time；消息源和网页价格不能当作当前价。\n"
@@ -222,7 +237,7 @@ class GeminiDecisionEngine:
             "- 卖出只能针对已有持仓，不能建议裸卖空。\n"
             "- confidence 低于 70 时应优先 HOLD。\n"
             "- max_notional 必须保守，不能超过系统给定上限。\n"
-            "- reason 和 learning_note 要让小白能看懂。\n\n"
+            "- reason 和 learning_note 要让用户能快速复盘，不要用居高临下的教学口吻。\n\n"
             f"Agent 模式: {self.config.agent_mode}\n"
             f"可执行市场: {sorted(self.config.execute_markets)}\n"
             f"置信度阈值: {self.config.confidence_threshold}\n"

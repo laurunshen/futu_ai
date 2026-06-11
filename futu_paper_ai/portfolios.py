@@ -13,6 +13,7 @@ from .news_signals import normalize_ticker
 PORTFOLIOS_PATH = STATE_ROOT / "portfolios.json"
 DEFAULT_PORTFOLIO_ID = "default"
 APPLY_MODES = {"observe", "manual", "auto"}
+PORTFOLIO_KINDS = {"paper", "actual"}
 DEFAULT_FX_TO_HKD = {"HKD": 1.0, "USD": 7.8, "CNY": 1.08, "CNH": 1.08}
 
 
@@ -76,6 +77,17 @@ def _normalize_apply_mode(value: Any) -> str:
     return mode if mode in APPLY_MODES else "manual"
 
 
+def _normalize_portfolio_kind(value: Any) -> str:
+    kind = str(value or "paper").strip().lower()
+    if kind in {"actual", "real", "live", "mirror"}:
+        return "actual"
+    return kind if kind in PORTFOLIO_KINDS else "paper"
+
+
+def _portfolio_kind_label(kind: Any) -> str:
+    return "实际仓位镜像" if _normalize_portfolio_kind(kind) == "actual" else "模拟实验盘"
+
+
 def _normalize_cash_by_currency(payload: dict[str, Any], base_currency: str) -> dict[str, float]:
     raw = payload.get("cash_by_currency")
     cash_by_currency: dict[str, float] = {}
@@ -130,6 +142,76 @@ def _normalize_sync_order(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_operation(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(payload.get("id") or _new_id()),
+        "type": str(payload.get("type") or "note"),
+        "source": str(payload.get("source") or ""),
+        "title": str(payload.get("title") or ""),
+        "summary": str(payload.get("summary") or ""),
+        "code": str(payload.get("code") or "").upper(),
+        "side": str(payload.get("side") or "").upper(),
+        "qty": _num(payload.get("qty"), 0),
+        "price": _num(payload.get("price"), 0),
+        "currency": str(payload.get("currency") or "").upper(),
+        "notional": round(_num(payload.get("notional"), 0), 4),
+        "decision_id": str(payload.get("decision_id") or ""),
+        "trade_id": str(payload.get("trade_id") or ""),
+        "payload": dict(payload.get("payload") or {}),
+        "created_at": str(payload.get("created_at") or _now()),
+    }
+
+
+def _operation_title(source: str, side: str = "") -> str:
+    source_key = str(source or "").lower()
+    if source_key == "auto":
+        return "AI 自动应用"
+    if source_key == "manual":
+        return "AI 手动应用"
+    if source_key == "futu_sync":
+        return "富途成交回写"
+    if source_key == "user_trade":
+        return "本人交易记录"
+    return f"{side} 交易".strip() or "交易记录"
+
+
+def _operation_from_trade(trade: dict[str, Any]) -> dict[str, Any]:
+    source = str(trade.get("source") or "")
+    side = str(trade.get("side") or "").upper()
+    code = str(trade.get("code") or "").upper()
+    qty = _num(trade.get("qty"), 0)
+    price = _num(trade.get("price"), 0)
+    currency = str(trade.get("currency") or "").upper()
+    return _normalize_operation(
+        {
+            "type": "trade",
+            "source": source,
+            "title": _operation_title(source, side),
+            "summary": f"{side} {qty:g} {code} @ {price:g} {currency}".strip(),
+            "code": code,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "currency": currency,
+            "notional": trade.get("notional"),
+            "decision_id": trade.get("decision_id"),
+            "trade_id": trade.get("id"),
+            "payload": {"reason": trade.get("reason"), "cash_effects": trade.get("cash_effects"), "fx": trade.get("fx")},
+            "created_at": trade.get("created_at"),
+        }
+    )
+
+
+def _append_operation(portfolio: dict[str, Any], operation: dict[str, Any]) -> None:
+    operations = [
+        _normalize_operation(item)
+        for item in portfolio.get("operations", [])
+        if isinstance(item, dict)
+    ]
+    operations.append(_normalize_operation(operation))
+    portfolio["operations"] = operations[-800:]
+
+
 def _default_store() -> dict[str, Any]:
     now = _now()
     return {
@@ -143,9 +225,11 @@ def _default_store() -> dict[str, Any]:
                 "cash_by_currency": {"HKD": 0.0},
                 "fx_to_hkd": dict(DEFAULT_FX_TO_HKD),
                 "apply_mode": "manual",
+                "portfolio_kind": "paper",
                 "futu_sync_enabled": False,
                 "positions": [],
                 "trades": [],
+                "operations": [],
                 "futu_sync_orders": [],
                 "created_at": now,
                 "updated_at": now,
@@ -208,9 +292,17 @@ def _normalize_portfolio(payload: dict[str, Any]) -> dict[str, Any]:
         for item in payload.get("futu_sync_orders", [])
         if isinstance(item, dict)
     ][-500:]
+    operations = [
+        _normalize_operation(item)
+        for item in payload.get("operations", [])
+        if isinstance(item, dict)
+    ][-800:]
+    portfolio_kind = _normalize_portfolio_kind(payload.get("portfolio_kind") or payload.get("portfolio_type"))
     return {
         "id": portfolio_id,
         "name": name,
+        "portfolio_kind": portfolio_kind,
+        "portfolio_kind_label": _portfolio_kind_label(portfolio_kind),
         "base_currency": base_currency,
         "cash": round(cash_by_currency.get(base_currency, 0.0), 4),
         "cash_by_currency": {currency: round(value, 4) for currency, value in sorted(cash_by_currency.items())},
@@ -222,6 +314,7 @@ def _normalize_portfolio(payload: dict[str, Any]) -> dict[str, Any]:
         "parent_id": str(payload.get("parent_id") or ""),
         "positions": positions,
         "trades": trades,
+        "operations": operations,
         "futu_sync_orders": sync_orders,
         "created_at": str(payload.get("created_at") or now),
         "updated_at": str(payload.get("updated_at") or now),
@@ -287,9 +380,21 @@ def create_portfolio(name: str, *, base_currency: str = "HKD", cash: float = 0.0
         "cash_by_currency": {str(base_currency or "HKD").strip().upper(): max(0.0, _num(cash, 0))},
         "fx_to_hkd": dict(DEFAULT_FX_TO_HKD),
         "apply_mode": "manual",
+        "portfolio_kind": "paper",
         "futu_sync_enabled": False,
         "positions": [],
         "trades": [],
+        "operations": [
+            _normalize_operation(
+                {
+                    "type": "portfolio",
+                    "source": "user",
+                    "title": "创建组合",
+                    "summary": f"创建 {str(name or '').strip()[:40] or '未命名模拟盘'}",
+                    "created_at": now,
+                }
+            )
+        ],
         "futu_sync_orders": [],
         "created_at": now,
         "updated_at": now,
@@ -336,10 +441,23 @@ def clone_portfolio(portfolio_id: str | None, *, name: str = "", apply_mode: str
         "cash_by_currency": dict(source.get("cash_by_currency") or {}),
         "fx_to_hkd": dict(source.get("fx_to_hkd") or DEFAULT_FX_TO_HKD),
         "apply_mode": _normalize_apply_mode(apply_mode or source.get("apply_mode")),
+        "portfolio_kind": source.get("portfolio_kind", "paper"),
         "futu_sync_enabled": False,
         "parent_id": source.get("id", ""),
         "positions": [dict(position) for position in source.get("positions", [])],
         "trades": [],
+        "operations": [
+            _normalize_operation(
+                {
+                    "type": "portfolio",
+                    "source": "user",
+                    "title": "克隆组合",
+                    "summary": f"从 {source.get('name', '')} 克隆",
+                    "payload": {"parent_id": source.get("id", ""), "apply_mode": _normalize_apply_mode(apply_mode or source.get("apply_mode"))},
+                    "created_at": now,
+                }
+            )
+        ],
         "futu_sync_orders": [],
         "created_at": now,
         "updated_at": now,
@@ -353,6 +471,7 @@ def update_portfolio_settings(
     portfolio_id: str | None,
     *,
     apply_mode: str | None = None,
+    portfolio_kind: str | None = None,
     futu_sync_enabled: bool | None = None,
 ) -> dict[str, Any]:
     store = load_portfolios()
@@ -360,10 +479,44 @@ def update_portfolio_settings(
     for portfolio in store["portfolios"]:
         if portfolio["id"] != target_id:
             continue
+        changes: dict[str, Any] = {}
         if apply_mode is not None:
-            portfolio["apply_mode"] = _normalize_apply_mode(apply_mode)
+            next_apply_mode = _normalize_apply_mode(apply_mode)
+            if portfolio.get("apply_mode") != next_apply_mode:
+                changes["apply_mode"] = {"from": portfolio.get("apply_mode"), "to": next_apply_mode}
+                portfolio["apply_mode"] = next_apply_mode
+        if portfolio_kind is not None:
+            next_kind = _normalize_portfolio_kind(portfolio_kind)
+            if _normalize_portfolio_kind(portfolio.get("portfolio_kind")) != next_kind:
+                changes["portfolio_kind"] = {
+                    "from": _portfolio_kind_label(portfolio.get("portfolio_kind")),
+                    "to": _portfolio_kind_label(next_kind),
+                }
+                portfolio["portfolio_kind"] = next_kind
+                portfolio["portfolio_kind_label"] = _portfolio_kind_label(next_kind)
         if futu_sync_enabled is not None:
-            portfolio["futu_sync_enabled"] = bool(futu_sync_enabled)
+            next_sync = bool(futu_sync_enabled)
+            if bool(portfolio.get("futu_sync_enabled")) != next_sync:
+                changes["futu_sync_enabled"] = {"from": bool(portfolio.get("futu_sync_enabled")), "to": next_sync}
+                portfolio["futu_sync_enabled"] = next_sync
+        if changes:
+            summary_parts = []
+            if "portfolio_kind" in changes:
+                summary_parts.append(f"口径 {changes['portfolio_kind']['from']} -> {changes['portfolio_kind']['to']}")
+            if "apply_mode" in changes:
+                summary_parts.append(f"AI模式 {changes['apply_mode']['from']} -> {changes['apply_mode']['to']}")
+            if "futu_sync_enabled" in changes:
+                summary_parts.append(f"富途同步 {'开启' if changes['futu_sync_enabled']['to'] else '关闭'}")
+            _append_operation(
+                portfolio,
+                {
+                    "type": "settings",
+                    "source": "user",
+                    "title": "更新组合设置",
+                    "summary": "；".join(summary_parts),
+                    "payload": changes,
+                },
+            )
         portfolio["updated_at"] = _now()
         store["active_id"] = target_id
         return save_portfolios(store)
@@ -426,9 +579,22 @@ def update_portfolio_cash(portfolio_id: str | None, cash: Any, *, currency: str 
         target_currency = str(currency or base_currency).strip().upper() or base_currency
         next_cash = max(0.0, _num(cash, 0))
         cash_by_currency = dict(portfolio.get("cash_by_currency") or {})
+        previous_cash = _num(cash_by_currency.get(target_currency), 0)
         cash_by_currency[target_currency] = next_cash
         portfolio["cash"] = _num(cash_by_currency.get(base_currency), 0)
         portfolio["cash_by_currency"] = cash_by_currency
+        if abs(previous_cash - next_cash) > 1e-9:
+            _append_operation(
+                portfolio,
+                {
+                    "type": "cash",
+                    "source": "user",
+                    "title": "更新现金",
+                    "summary": f"{target_currency} {previous_cash:g} -> {next_cash:g}",
+                    "currency": target_currency,
+                    "payload": {"from": previous_cash, "to": next_cash},
+                },
+            )
         portfolio["updated_at"] = _now()
         store["active_id"] = target_id
         return save_portfolios(store)
@@ -443,10 +609,25 @@ def upsert_position(portfolio_id: str | None, payload: dict[str, Any]) -> dict[s
             continue
         code = _normalize_code(payload.get("code", ""))
         existing_by_code = {position["code"]: position for position in portfolio.get("positions", [])}
-        position = _normalize_position(payload, existing_by_code.get(code))
+        existing = existing_by_code.get(code)
+        position = _normalize_position(payload, existing)
         portfolio["positions"] = [item for item in portfolio.get("positions", []) if item["code"] != code]
         portfolio["positions"].append(position)
         portfolio["positions"].sort(key=lambda item: item["code"])
+        _append_operation(
+            portfolio,
+            {
+                "type": "position",
+                "source": "user",
+                "title": "编辑持仓快照" if existing else "新增持仓快照",
+                "summary": f"{position['code']} 数量 {position['qty']:g} 成本 {position['cost_price']:g} {position['currency']}",
+                "code": position["code"],
+                "qty": position["qty"],
+                "price": position["cost_price"],
+                "currency": position["currency"],
+                "payload": {"before": existing or {}, "after": position},
+            },
+        )
         portfolio["updated_at"] = _now()
         store["active_id"] = target_id
         return save_portfolios(store)
@@ -461,9 +642,21 @@ def delete_position(portfolio_id: str | None, code: str) -> dict[str, Any]:
         if portfolio["id"] != target_id:
             continue
         before = len(portfolio.get("positions", []))
+        removed = next((item for item in portfolio.get("positions", []) if item.get("code") == normalized_code), None)
         portfolio["positions"] = [item for item in portfolio.get("positions", []) if item["code"] != normalized_code]
         if len(portfolio["positions"]) == before:
             raise ValueError("position not found")
+        _append_operation(
+            portfolio,
+            {
+                "type": "position",
+                "source": "user",
+                "title": "删除持仓快照",
+                "summary": normalized_code,
+                "code": normalized_code,
+                "payload": {"before": removed or {}},
+            },
+        )
         portfolio["updated_at"] = _now()
         return save_portfolios(store)
     raise ValueError("portfolio not found")
@@ -559,6 +752,7 @@ def apply_order_to_portfolio(
                 existing["cost_price"] = round(next_cost, 4)
                 existing["updated_at"] = _now()
             else:
+                default_note = "本人交易记录" if str(source or "").lower() == "user_trade" else "AI applied local trade"
                 positions.append(
                     _normalize_position(
                         {
@@ -566,7 +760,7 @@ def apply_order_to_portfolio(
                             "qty": intent.qty,
                             "cost_price": intent.price,
                             "currency": currency,
-                            "note": "AI applied local trade",
+                            "note": default_note,
                         }
                     )
                 )
@@ -609,6 +803,7 @@ def apply_order_to_portfolio(
             "created_at": _now(),
         }
         trades.append(trade)
+        _append_operation(portfolio, _operation_from_trade(trade))
 
         portfolio["cash_by_currency"] = cash_by_currency
         portfolio["cash"] = round(_num(cash_by_currency.get(base_currency), 0), 4)
@@ -649,12 +844,15 @@ def portfolio_context(portfolio_id: str | None = None) -> dict[str, Any]:
         "portfolio": {
             "id": active["id"],
             "name": active["name"],
+            "portfolio_kind": active.get("portfolio_kind", "paper"),
+            "portfolio_kind_label": active.get("portfolio_kind_label") or _portfolio_kind_label(active.get("portfolio_kind")),
             "base_currency": active["base_currency"],
             "cash": active["cash"],
             "cash_by_currency": active.get("cash_by_currency", {}),
             "fx_to_hkd": active.get("fx_to_hkd", {}),
             "buying_power_rule": "Local ledger can auto-convert base currency cash for cross-currency simulated buys.",
             "apply_mode": active.get("apply_mode", "manual"),
+            "recent_operations": list(active.get("operations", []))[-20:],
             "updated_at": active["updated_at"],
         },
         "positions": list(active.get("positions", [])),

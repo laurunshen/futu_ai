@@ -23,6 +23,10 @@ from .watchlist import WatchItem, load_watchlist
 LOG_DIR = PROJECT_ROOT / "data" / "decisions"
 
 
+def _portfolio_kind_label(kind: Any) -> str:
+    return "实际仓位镜像" if str(kind or "").lower() == "actual" else "模拟实验盘"
+
+
 @dataclass(frozen=True)
 class AutoTradeResult:
     ok: bool
@@ -148,10 +152,14 @@ class AutoTrader:
         snapshot_by_code = {str(row.get("code", "")).upper(): row for row in snapshots}
         positions = self._enrich_portfolio_positions(positions_raw, snapshot_by_code)
         fx_payload = self.client.fx_rates_to_hkd()
+        portfolio_kind = str(portfolio.get("portfolio_kind") or "paper").lower()
+        portfolio_kind_label = _portfolio_kind_label(portfolio_kind)
         account = {
             "type": "local_portfolio",
             "id": portfolio.get("id"),
             "name": portfolio.get("name"),
+            "portfolio_kind": portfolio_kind,
+            "portfolio_kind_label": portfolio_kind_label,
             "base_currency": portfolio.get("base_currency"),
             "cash": portfolio.get("cash", 0),
             "cash_by_currency": portfolio.get("cash_by_currency", {}),
@@ -163,6 +171,7 @@ class AutoTrader:
             "apply_mode": portfolio.get("apply_mode", "manual"),
             "futu_sync_enabled": bool(portfolio.get("futu_sync_enabled")),
             "position_count": len(positions),
+            "recent_operations": list(portfolio.get("operations", []))[-20:],
             "price_rule": "Current prices are only from Futu OpenD snapshots attached to positions/candidates.",
         }
         news_payload = load_news_signals(
@@ -190,10 +199,17 @@ class AutoTrader:
             news_notes.extend(str(note) for note in news_payload.get("notes") or [])
         apply_mode = str(portfolio.get("apply_mode") or "manual").lower()
         futu_sync_text = "开启" if portfolio.get("futu_sync_enabled") else "关闭"
+        if portfolio_kind == "actual":
+            portfolio_note = "本轮是实际仓位镜像盘决策；这些持仓代表用户真实券商仓位的本地镜像。"
+            language_note = "请把它称为实际仓位或实际仓位镜像，不要称为教学模拟盘。"
+        else:
+            portfolio_note = "本轮是模拟实验盘决策；用于策略实验、AB Test 和复盘。"
+            language_note = "可以称为模拟实验盘，但仍按严肃风控处理。"
         news_notes.append(
-            f"本轮是本地模拟盘决策；当前模拟盘应用模式={apply_mode}；富途模拟盘同步={futu_sync_text}。"
+            f"{portfolio_note}当前应用模式={apply_mode}；富途模拟盘同步={futu_sync_text}。"
             "manual 需要用户确认，auto 会按设置应用；若同步开启，应用时先提交富途模拟单，再按实际成交反写本地。"
         )
+        news_notes.append(language_note)
         news_notes.append(
             f"FX口径：{fx_payload.get('source')}；"
             f"{'已使用富途OpenD FX快照' if fx_payload.get('ok') else '富途FX不可用，使用本地默认汇率'}。"
@@ -237,6 +253,8 @@ class AutoTrader:
             portfolio={
                 "id": portfolio.get("id"),
                 "name": portfolio.get("name"),
+                "portfolio_kind": portfolio_kind,
+                "portfolio_kind_label": portfolio_kind_label,
                 "base_currency": portfolio.get("base_currency"),
                 "cash": portfolio.get("cash", 0),
                 "cash_by_currency": portfolio.get("cash_by_currency", {}),

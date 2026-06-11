@@ -381,10 +381,27 @@ function applyModeLabel(mode) {
   }[String(mode || "manual").toLowerCase()] || "手动应用";
 }
 
+function portfolioKindLabel(kind) {
+  return {
+    actual: "实际仓位镜像",
+    paper: "模拟实验盘",
+  }[String(kind || "paper").toLowerCase()] || "模拟实验盘";
+}
+
 function futuSyncLabel(portfolio) {
   if (!portfolio?.futu_sync_enabled) return "";
   const pending = Number(portfolio.futu_sync_pending_count || 0);
   return pending > 0 ? `富途同步 · ${pending} 待回写` : "富途同步";
+}
+
+function operationSourceLabel(source) {
+  return {
+    auto: "AI 自动",
+    manual: "AI 手动",
+    futu_sync: "富途回写",
+    user_trade: "本人交易",
+    user: "本人操作",
+  }[String(source || "").toLowerCase()] || "操作";
 }
 
 function applicationLabel(application) {
@@ -459,11 +476,12 @@ function renderPortfolios(payload) {
         .map(([currency, row]) => `${currency} ${fmt(row.market_value || row.cost_value || 0)}`)
         .join(" · ");
       const syncLabel = futuSyncLabel(portfolio);
+      const kindLabel = portfolioKindLabel(portfolio.portfolio_kind);
       return `
         <article class="portfolio-item ${active ? "active" : ""}">
           <button type="button" class="portfolio-main" data-portfolio-active="${html(portfolio.id)}">
             <span class="portfolio-name">${html(portfolio.name)}</span>
-            <span class="portfolio-meta">${html(applyModeLabel(portfolio.apply_mode))}${syncLabel ? ` · ${html(syncLabel)}` : ""} · ${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
+            <span class="portfolio-meta">${html(kindLabel)} · ${html(applyModeLabel(portfolio.apply_mode))}${syncLabel ? ` · ${html(syncLabel)}` : ""} · ${html(portfolio.position_count || 0)} positions${totals ? ` · ${html(totals)}` : ""}</span>
           </button>
           <button type="button" class="portfolio-delete" data-portfolio-delete="${html(portfolio.id)}" title="删除模拟盘" aria-label="删除 ${html(portfolio.name)}">×</button>
         </article>
@@ -489,6 +507,7 @@ function renderPortfolioDetails(portfolio, quoteError = "") {
   el("portfolioQuoteStatus").className = `detail-status ${quoteError ? "sell" : "buy"}`;
   renderPortfolioSummary(portfolio, quoteError);
   renderPortfolioPositions(portfolio);
+  renderPortfolioOperations(portfolio);
 }
 
 function renderPortfolioSummary(portfolio, quoteError = "") {
@@ -564,6 +583,13 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     </div>
     <div class="portfolio-settings">
       <label>
+        仓位口径
+        <select id="activePortfolioKind">
+          <option value="paper" ${!portfolio.portfolio_kind || portfolio.portfolio_kind === "paper" ? "selected" : ""}>模拟实验盘</option>
+          <option value="actual" ${portfolio.portfolio_kind === "actual" ? "selected" : ""}>实际仓位镜像</option>
+        </select>
+      </label>
+      <label>
         AI 应用模式
         <select id="activePortfolioMode">
           <option value="observe" ${portfolio.apply_mode === "observe" ? "selected" : ""}>仅观察</option>
@@ -588,6 +614,7 @@ function renderPortfolioSummary(portfolio, quoteError = "") {
     const currency = el("activePortfolioCashCurrency").value;
     el("activePortfolioCash").value = cashByCurrency[currency] ?? 0;
   });
+  el("activePortfolioKind")?.addEventListener("change", updateActivePortfolioMode);
   el("activePortfolioMode")?.addEventListener("change", updateActivePortfolioMode);
   el("activePortfolioFutuSync")?.addEventListener("change", updateActivePortfolioMode);
   target.querySelectorAll("[data-clone-mode]").forEach((button) => {
@@ -647,6 +674,108 @@ function renderPortfolioPositions(portfolio) {
   list.querySelectorAll("[data-position-delete]").forEach((button) => {
     button.addEventListener("click", () => deletePortfolioPosition(button.dataset.positionDelete));
   });
+}
+
+function tradeOperationFromTrade(trade) {
+  const source = String(trade.source || "");
+  const side = String(trade.side || "").toUpperCase();
+  const code = String(trade.code || "").toUpperCase();
+  return {
+    id: `trade-${trade.id || trade.decision_id || trade.created_at}`,
+    type: "trade",
+    source,
+    title: {
+      auto: "AI 自动应用",
+      manual: "AI 手动应用",
+      futu_sync: "富途成交回写",
+      user_trade: "本人交易记录",
+    }[source] || `${side} 交易`,
+    summary: `${side} ${fmt(trade.qty)} ${code} @ ${fmt(trade.price)} ${trade.currency || ""}`.trim(),
+    code,
+    side,
+    qty: trade.qty,
+    price: trade.price,
+    currency: trade.currency,
+    decision_id: trade.decision_id,
+    trade_id: trade.id,
+    payload: { reason: trade.reason, realized_pnl: trade.realized_pnl },
+    created_at: trade.created_at,
+  };
+}
+
+function operationFromSyncOrder(order) {
+  const status = String(order.status || "").toLowerCase();
+  return {
+    id: `sync-${order.order_id || order.id || order.created_at}`,
+    type: "futu_sync",
+    source: "futu_sync",
+    title: {
+      futu_submitted: "富途订单已提交",
+      partially_applied: "富途部分成交",
+      local_apply_failed: "富途成交反写失败",
+    }[status] || "富途同步",
+    summary: `${order.side || ""} ${fmt(order.dealt_qty || order.qty)} ${order.code || ""}${order.dealt_avg_price ? ` @ ${fmt(order.dealt_avg_price)}` : ""}`.trim(),
+    code: order.code,
+    side: order.side,
+    qty: order.dealt_qty || order.qty,
+    price: order.dealt_avg_price || order.price,
+    currency: "",
+    decision_id: order.decision_id,
+    trade_id: "",
+    payload: { reason: order.message, order_id: order.order_id },
+    created_at: order.updated_at || order.created_at,
+  };
+}
+
+function renderPortfolioOperations(portfolio) {
+  const target = el("portfolioOperations");
+  if (!target) return;
+  if (!portfolio) {
+    target.innerHTML = `<div class="empty">未选择组合</div>`;
+    return;
+  }
+  const operations = Array.isArray(portfolio.operations) ? portfolio.operations.map((item) => ({ ...item })) : [];
+  const operationTradeIds = new Set(operations.map((item) => item.trade_id).filter(Boolean));
+  const legacyTradeOps = (portfolio.trades || [])
+    .filter((trade) => trade?.id && !operationTradeIds.has(trade.id))
+    .map(tradeOperationFromTrade);
+  const syncOps = (portfolio.futu_sync_orders || [])
+    .filter((order) => !["applied"].includes(String(order.status || "").toLowerCase()))
+    .map(operationFromSyncOrder);
+  const rows = [...operations, ...legacyTradeOps, ...syncOps]
+    .filter((item) => item && item.created_at)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, 40);
+
+  if (!rows.length) {
+    target.innerHTML = `<div class="empty">还没有操作记录</div>`;
+    return;
+  }
+
+  target.innerHTML = rows
+    .map((row) => {
+      const source = operationSourceLabel(row.source);
+      const meta = [
+        row.code,
+        row.decision_id ? `决策 ${row.decision_id}` : "",
+        row.currency,
+      ].filter(Boolean).join(" · ");
+      const reason = row.payload?.reason || row.summary || "";
+      return `
+        <article class="portfolio-operation">
+          <div class="portfolio-operation-top">
+            <span class="portfolio-operation-title">${html(row.title || source)}</span>
+            <span class="portfolio-operation-time">${html(fmtTime(row.created_at))}</span>
+          </div>
+          <div class="portfolio-operation-summary">${html(row.summary || "-")}</div>
+          <div class="portfolio-operation-meta">
+            <span>${html(source)}${meta ? ` · ${html(meta)}` : ""}</span>
+            ${reason && reason !== row.summary ? `<span>${html(reason)}</span>` : ""}
+          </div>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderAccount(row) {
@@ -1328,6 +1457,7 @@ function renderDecisionDetail(row) {
       "模拟盘",
       detailKvGrid([
         ["名称", portfolio.name],
+        ["口径", portfolioKindLabel(portfolio.portfolio_kind)],
         ["币种", portfolio.base_currency],
         ["现金", portfolio.cash],
         ["FX", portfolio.fx_source || ""],
@@ -1681,6 +1811,7 @@ async function updateActivePortfolioMode() {
       method: "POST",
       body: JSON.stringify({
         portfolio_id: state.activePortfolioId,
+        portfolio_kind: el("activePortfolioKind")?.value || "paper",
         apply_mode: el("activePortfolioMode").value,
         futu_sync_enabled: Boolean(el("activePortfolioFutuSync")?.checked),
       }),
@@ -1747,6 +1878,43 @@ async function savePortfolioPosition() {
   }
 }
 
+function portfolioTradePayload() {
+  return {
+    code: normalizeRiskCode(el("portfolioTradeCode").value),
+    side: el("portfolioTradeSide").value,
+    qty: Number(el("portfolioTradeQty").value || 0),
+    price: Number(el("portfolioTradePrice").value || 0),
+    order_type: "LIMIT",
+  };
+}
+
+async function recordPortfolioTrade() {
+  if (!state.activePortfolioId) return;
+  const order = portfolioTradePayload();
+  if (!order.code || order.qty <= 0 || order.price <= 0) {
+    el("portfolioTradeCode").focus();
+    return;
+  }
+  try {
+    const payload = await api("/api/portfolios/trade", {
+      method: "POST",
+      body: JSON.stringify({
+        portfolio_id: state.activePortfolioId,
+        order,
+        reason: el("portfolioTradeReason").value.trim(),
+      }),
+    });
+    el("portfolioTradeCode").value = "";
+    el("portfolioTradeQty").value = "1";
+    el("portfolioTradePrice").value = "1";
+    el("portfolioTradeReason").value = "";
+    renderPortfolios(payload.portfolio_payload || payload);
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
 function editPortfolioPosition(code) {
   const row = activePortfolio()?.positions?.find((position) => position.code === code);
   if (!row) return;
@@ -1756,6 +1924,8 @@ function editPortfolioPosition(code) {
   el("portfolioPositionCost").value = row.cost_price || "";
   el("portfolioPositionCurrency").value = row.currency || "HKD";
   el("portfolioPositionNote").value = row.note || "";
+  el("portfolioTradeCode").value = row.code || "";
+  el("portfolioTradePrice").value = row.last_price || row.cost_price || "";
   el("portfolioPositionCode").focus();
 }
 
@@ -1812,10 +1982,17 @@ function bindButtons() {
     }
   });
   el("savePortfolioPosition").addEventListener("click", savePortfolioPosition);
+  el("recordPortfolioTrade").addEventListener("click", recordPortfolioTrade);
   el("portfolioPositionCode").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       savePortfolioPosition();
+    }
+  });
+  el("portfolioTradeCode").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      recordPortfolioTrade();
     }
   });
   el("refreshPositions").addEventListener("click", refreshPositions);

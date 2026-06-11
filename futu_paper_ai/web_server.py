@@ -21,6 +21,7 @@ from .futu_sync import apply_order_with_optional_futu_sync, refresh_futu_sync_or
 from .models import OrderIntent
 from .news_signals import load_news_signals
 from .portfolios import (
+    apply_order_to_portfolio,
     clone_portfolio,
     create_portfolio,
     delete_portfolio,
@@ -476,6 +477,7 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 store = update_portfolio_settings(
                     str(payload.get("portfolio_id", "")).strip() or None,
                     apply_mode=str(payload.get("apply_mode", "")).strip() or None,
+                    portfolio_kind=str(payload.get("portfolio_kind", "")).strip() or None,
                     futu_sync_enabled=bool(payload["futu_sync_enabled"]) if "futu_sync_enabled" in payload else None,
                 )
                 self._send_json(self._portfolio_payload(store))
@@ -495,6 +497,19 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     str(payload.get("code", "")).strip(),
                 )
                 self._send_json(self._portfolio_payload(store))
+            elif path == "/api/portfolios/trade":
+                fx_payload = self.client.fx_rates_to_hkd()
+                application = apply_order_to_portfolio(
+                    str(payload.get("portfolio_id", "")).strip() or None,
+                    payload.get("order", payload),
+                    source="user_trade",
+                    decision_id="",
+                    reason=str(payload.get("reason", "")).strip() or "User recorded broker trade",
+                    fx_to_hkd=fx_payload.get("fx_to_hkd"),
+                    fx_source=str(fx_payload.get("source") or ""),
+                    fx_status=fx_payload,
+                )
+                self._send_json({"ok": True, "application": application, "portfolio_payload": self._portfolio_payload()})
             elif path == "/api/decisions/apply":
                 decision_id = str(payload.get("decision_id", "")).strip()
                 if not decision_id:

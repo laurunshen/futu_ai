@@ -84,7 +84,12 @@ Each portfolio has an AI application mode: `observe` only records decisions,
 `manual` waits for the user to apply an AI order from the decision detail page,
 and `auto` applies risk-approved AI orders to the local portfolio ledger. Local
 applications update `data/state/portfolios.json`, write a trade record, and do
-do not submit Futu orders unless that portfolio has Futu paper sync enabled.
+not submit Futu orders unless that portfolio has Futu paper sync enabled. Each
+portfolio can be marked as a paper experiment or an actual-position mirror; AI
+prompts use that flag so actual holdings are treated as the user's real
+broker-position mirror, not as a teaching simulation. Portfolio actions are also
+kept in an operation log covering snapshot edits, cash edits, user-recorded
+broker trades, AI manual applies, AI auto applies, and Futu fill write-backs.
 When sync is enabled, applying an AI order first submits a Futu SIMULATE order
 and then writes the actual Futu fill quantity and average fill price back to the
 local ledger. Local buys use broker-like buying power: they spend the trade

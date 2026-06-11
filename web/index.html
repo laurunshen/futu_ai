@@ -263,7 +263,41 @@
               </div>
               <button type="button" class="primary-wide" id="savePortfolioPosition">保存持仓</button>
             </form>
+            <form class="position-form trade-form" id="portfolioTradeForm">
+              <div class="field-grid">
+                <label>
+                  操作
+                  <select id="portfolioTradeSide">
+                    <option value="BUY">买入</option>
+                    <option value="SELL">卖出</option>
+                  </select>
+                </label>
+                <label>
+                  代码
+                  <input id="portfolioTradeCode" placeholder="HK.09988 或 PDD" autocomplete="off">
+                </label>
+                <label>
+                  数量
+                  <input id="portfolioTradeQty" type="number" min="0" step="1" value="1">
+                </label>
+                <label>
+                  成交价
+                  <input id="portfolioTradePrice" type="number" min="0" step="0.01" value="1">
+                </label>
+                <label class="span-2">
+                  备注
+                  <input id="portfolioTradeReason" placeholder="本人券商实际买入/卖出、调仓原因" autocomplete="off">
+                </label>
+              </div>
+              <button type="button" class="secondary primary-wide" id="recordPortfolioTrade">记录本人交易</button>
+            </form>
             <div class="portfolio-position-list" id="portfolioPositions"></div>
+            <div class="portfolio-activity">
+              <div class="panel-head inline-head">
+                <h3>操作记录</h3>
+              </div>
+              <div class="portfolio-operation-list" id="portfolioOperations"></div>
+            </div>
           </div>
         </div>
       </section>
