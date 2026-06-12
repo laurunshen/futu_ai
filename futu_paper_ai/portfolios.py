@@ -1195,6 +1195,140 @@ def delete_position(portfolio_id: str | None, code: str) -> dict[str, Any]:
     raise ValueError("portfolio not found")
 
 
+def _reverse_trade_cash(cash_by_currency: dict[str, Any], trade: dict[str, Any]) -> dict[str, float]:
+    cash = {str(currency).upper(): _num(amount, 0) for currency, amount in cash_by_currency.items()}
+    effects = [item for item in trade.get("cash_effects") or [] if isinstance(item, dict)]
+    if effects:
+        for effect in effects:
+            currency = str(effect.get("currency") or trade.get("currency") or "").upper()
+            if not currency:
+                continue
+            cash[currency] = round(_num(cash.get(currency), 0) - _num(effect.get("amount"), 0), 4)
+        return cash
+
+    currency = str(trade.get("currency") or "").upper()
+    if not currency:
+        return cash
+    side = str(trade.get("side") or "").upper()
+    notional = _num(trade.get("notional"), 0)
+    fees = _num(trade.get("fees"), 0)
+    net_cash_amount = _num(trade.get("net_cash_amount"), 0)
+    if side == "BUY":
+        cash[currency] = round(_num(cash.get(currency), 0) + (abs(net_cash_amount) or notional + fees), 4)
+    elif side == "SELL":
+        cash[currency] = round(_num(cash.get(currency), 0) - (net_cash_amount or max(notional - fees, 0)), 4)
+    return cash
+
+
+def _reverse_trade_position(portfolio: dict[str, Any], trade: dict[str, Any]) -> list[dict[str, Any]]:
+    side = str(trade.get("side") or "").upper()
+    code = _normalize_code(trade.get("code", ""))
+    qty = _num(trade.get("qty"), 0)
+    if qty <= 0:
+        raise ValueError("trade qty must be greater than 0")
+
+    positions = [dict(position) for position in portfolio.get("positions", [])]
+    existing = next((position for position in positions if position.get("code") == code), None)
+    currency = str(trade.get("currency") or _currency_for_market(infer_market(code))).upper()
+
+    if side == "BUY":
+        if not existing:
+            raise ValueError("cannot delete BUY trade because the matching position is no longer present")
+        old_qty = _num(existing.get("qty"), 0)
+        if old_qty + 1e-9 < qty:
+            raise ValueError("cannot delete BUY trade because current holding is lower than the recorded BUY qty")
+        remaining_qty = round(old_qty - qty, 4)
+        if remaining_qty <= 1e-9:
+            return [position for position in positions if position.get("code") != code]
+
+        cost_to_remove = abs(_num(trade.get("net_cash_amount"), 0)) or (_num(trade.get("notional"), 0) + _num(trade.get("fees"), 0))
+        remaining_cost = old_qty * _num(existing.get("cost_price"), 0) - cost_to_remove
+        existing["qty"] = remaining_qty
+        existing["cost_price"] = round(remaining_cost / remaining_qty, 4) if remaining_cost > 0 else _num(existing.get("cost_price"), 0)
+        existing["updated_at"] = _now()
+        return positions
+
+    if side == "SELL":
+        net_proceeds = _num(trade.get("net_cash_amount"), 0) or max(_num(trade.get("notional"), 0) - _num(trade.get("fees"), 0), 0)
+        avg_cost = (net_proceeds - _num(trade.get("realized_pnl"), 0)) / qty if qty > 0 else _num(trade.get("price"), 0)
+        if existing:
+            old_qty = _num(existing.get("qty"), 0)
+            old_cost = _num(existing.get("cost_price"), 0)
+            next_qty = old_qty + qty
+            existing["qty"] = round(next_qty, 4)
+            existing["cost_price"] = round(((old_qty * old_cost) + (avg_cost * qty)) / next_qty, 4) if next_qty > 0 else avg_cost
+            existing["updated_at"] = _now()
+        else:
+            positions.append(
+                _normalize_position(
+                    {
+                        "code": code,
+                        "qty": qty,
+                        "cost_price": avg_cost,
+                        "currency": currency,
+                        "note": "撤销本人卖出记录后恢复",
+                    }
+                )
+            )
+        return positions
+
+    raise ValueError("trade side must be BUY or SELL")
+
+
+def delete_user_trade(portfolio_id: str | None, trade_id: str) -> dict[str, Any]:
+    with _portfolio_transaction() as (conn, store):
+        target_id = str(portfolio_id or store["active_id"])
+        trade_id = str(trade_id or "").strip()
+        if not trade_id:
+            raise ValueError("trade_id is required")
+
+        for portfolio in store["portfolios"]:
+            if portfolio["id"] != target_id:
+                continue
+            trades = [dict(trade) for trade in portfolio.get("trades", []) if isinstance(trade, dict)]
+            index = next((idx for idx, trade in enumerate(trades) if str(trade.get("id") or "") == trade_id), None)
+            if index is None:
+                raise ValueError("trade not found")
+
+            trade = trades[index]
+            if str(trade.get("source") or "").lower() != "user_trade":
+                raise ValueError("only user-entered trade records can be deleted")
+
+            code = str(trade.get("code") or "").upper()
+            if any(str(later.get("code") or "").upper() == code for later in trades[index + 1 :]):
+                raise ValueError("cannot delete this trade because later trades exist for the same code; delete later same-code records first")
+
+            portfolio["cash_by_currency"] = _reverse_trade_cash(dict(portfolio.get("cash_by_currency") or {}), trade)
+            base_currency = str(portfolio.get("base_currency") or "HKD").upper()
+            portfolio["cash"] = round(_num(portfolio["cash_by_currency"].get(base_currency), 0), 4)
+            portfolio["positions"] = sorted(_reverse_trade_position(portfolio, trade), key=lambda item: item.get("code", ""))
+            portfolio["trades"] = trades[:index] + trades[index + 1 :]
+            portfolio["operations"] = [
+                _normalize_operation(item)
+                for item in portfolio.get("operations", [])
+                if isinstance(item, dict) and str(item.get("trade_id") or "") != trade_id
+            ]
+            _append_operation(
+                portfolio,
+                {
+                    "type": "trade_delete",
+                    "source": "user",
+                    "title": "撤销本人交易记录",
+                    "summary": f"{trade.get('side', '')} {trade.get('qty', '')} {trade.get('code', '')} @ {trade.get('price', '')}",
+                    "code": str(trade.get("code") or ""),
+                    "side": str(trade.get("side") or ""),
+                    "qty": _num(trade.get("qty"), 0),
+                    "price": _num(trade.get("price"), 0),
+                    "currency": str(trade.get("currency") or ""),
+                    "payload": {"deleted_trade": trade},
+                },
+            )
+            portfolio["updated_at"] = _now()
+            store["active_id"] = target_id
+            return _save_portfolios_unlocked(store, conn)
+    raise ValueError("portfolio not found")
+
+
 def apply_order_to_portfolio(
     portfolio_id: str | None,
     order_payload: dict[str, Any],

@@ -27,6 +27,7 @@ from .portfolios import (
     create_portfolio,
     delete_portfolio,
     delete_position,
+    delete_user_trade,
     effective_fx_payload,
     get_portfolio,
     load_portfolios,
@@ -644,6 +645,12 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                     fx_status=fx_payload,
                 )
                 self._send_json({"ok": bool(application.get("ok", True)), "application": application, "portfolio_payload": self._portfolio_payload()})
+            elif path == "/api/portfolios/trade/delete":
+                store = delete_user_trade(
+                    str(payload.get("portfolio_id", "")).strip() or None,
+                    str(payload.get("trade_id", "")).strip(),
+                )
+                self._send_json(self._portfolio_payload(store))
             elif path == "/api/decisions/apply":
                 decision_id = str(payload.get("decision_id", "")).strip()
                 if not decision_id:

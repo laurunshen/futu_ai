@@ -690,6 +690,11 @@ textarea {
   font-size: 13px;
 }
 
+.portfolio-operation-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .portfolio-position {
   display: grid;
   gap: 10px;

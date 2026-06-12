@@ -999,6 +999,7 @@ function renderPortfolioOperations(portfolio) {
   target.innerHTML = rows
     .map((row) => {
       const source = operationSourceLabel(row.source);
+      const canDeleteTrade = String(row.source || "").toLowerCase() === "user_trade" && row.trade_id;
       const meta = [
         row.code,
         row.decision_id ? `决策 ${row.decision_id}` : "",
@@ -1017,10 +1018,21 @@ function renderPortfolioOperations(portfolio) {
             <span>${html(source)}${meta ? ` · ${html(meta)}` : ""}</span>
             ${reason && reason !== row.summary ? `<span>${html(reason)}</span>` : ""}
           </div>
+          ${
+            canDeleteTrade
+              ? `<div class="portfolio-operation-actions">
+                  <button type="button" class="danger compact" data-trade-delete="${html(row.trade_id)}" data-trade-summary="${html(row.summary || row.trade_id)}">撤销记录</button>
+                </div>`
+              : ""
+          }
         </article>
       `;
     })
     .join("");
+
+  target.querySelectorAll("[data-trade-delete]").forEach((button) => {
+    button.addEventListener("click", () => deletePortfolioTrade(button.dataset.tradeDelete, button.dataset.tradeSummary || ""));
+  });
 }
 
 function renderPortfolioTradeAction(portfolio) {
@@ -2821,6 +2833,25 @@ async function deletePortfolioPosition(code) {
     const payload = await api("/api/portfolios/position/delete", {
       method: "POST",
       body: JSON.stringify({ portfolio_id: state.activePortfolioId, code }),
+    });
+    renderPortfolios(payload);
+    await refreshEvaluation();
+    showOutput(payload);
+  } catch (err) {
+    showOutput(err);
+  }
+}
+
+async function deletePortfolioTrade(tradeId, summary) {
+  if (!state.activePortfolioId || !tradeId) return;
+  const ok = window.confirm(
+    `撤销本人交易记录：${summary || tradeId}？\n\n系统会反向调整现金和持仓，并保留一条撤销审计记录。`
+  );
+  if (!ok) return;
+  try {
+    const payload = await api("/api/portfolios/trade/delete", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_id: state.activePortfolioId, trade_id: tradeId }),
     });
     renderPortfolios(payload);
     await refreshEvaluation();
