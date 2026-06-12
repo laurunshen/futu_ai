@@ -16,6 +16,7 @@ const state = {
   newsPage: 1,
   newsTotalPages: 1,
   riskAllowedCodes: [],
+  watchNameByCode: new Map(),
   portfolios: [],
   activePortfolioId: "",
   chatMessages: [],
@@ -105,6 +106,41 @@ function html(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function normalizedCode(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function cleanSecurityName(name, code) {
+  const text = String(name || "").trim();
+  if (!text || text.toUpperCase() === normalizedCode(code)) return "";
+  return text;
+}
+
+function securityNameForCode(code, row = {}) {
+  const target = normalizedCode(code);
+  if (!target || target === "NONE") return "";
+  const candidates = Array.isArray(row?.candidates) ? row.candidates : [];
+  for (const candidate of candidates) {
+    if (normalizedCode(candidate?.code) !== target) continue;
+    const name = cleanSecurityName(candidate.name || candidate.watch_name || candidate.security_name || candidate.stock_name, target);
+    if (name) return name;
+  }
+  return cleanSecurityName(state.watchNameByCode.get(target), target);
+}
+
+function securityLabelText(code, row = {}) {
+  const symbol = fmt(code || "NONE");
+  const name = securityNameForCode(symbol, row);
+  return name ? `${name} · ${symbol}` : symbol;
+}
+
+function renderSecurityLabel(code, row = {}) {
+  const symbol = fmt(code || "NONE");
+  const name = securityNameForCode(symbol, row);
+  if (!name) return `<span class="security-symbol only">${html(symbol)}</span>`;
+  return `<span class="security-name">${html(name)}</span><span class="security-symbol">${html(symbol)}</span>`;
 }
 
 function rowChangePct(row) {
@@ -376,6 +412,11 @@ function renderMyWatchlist(payload) {
   const items = payload.items || [];
   const quoteByCode = new Map(quotes.map((row) => [String(row.code || "").toUpperCase(), row]));
   const rows = items.map((item) => ({ ...item, ...(quoteByCode.get(String(item.code).toUpperCase()) || {}) }));
+  state.watchNameByCode = new Map(
+    rows
+      .map((row) => [normalizedCode(row.code), cleanSecurityName(row.name || row.watch_name, row.code)])
+      .filter(([code, name]) => code && name)
+  );
 
   if (!rows.length) {
     grid.innerHTML = `<div class="empty">No watchlist symbols</div>`;
@@ -1452,7 +1493,7 @@ function renderDecisionTracking(rows) {
         <article class="decision-tracking-item">
           <div class="decision-tracking-top">
             <div>
-              <div class="decision-code">${html(row.code || "NONE")}</div>
+              <div class="decision-code decision-security">${renderSecurityLabel(row.code || "NONE", { candidates: row.candidates || [] })}</div>
               <div class="decision-time">${html(fmtTime(row.timestamp))} · ${html(row.portfolio_name || "-")} · ${html(targetLabel)}</div>
             </div>
             <div class="decision-badges">
@@ -2112,7 +2153,7 @@ function renderDecisionDetail(row) {
     <article class="detail-hero ${html(action)}">
       <div class="detail-hero-top">
         <div>
-          <div class="detail-title">${html(decision.code || "NONE")}</div>
+          <div class="detail-title decision-security">${renderSecurityLabel(decision.code || "NONE", row)}</div>
           <div class="detail-subtitle">${html(fmtTime(row.timestamp || row.ts))} · ${html(portfolio?.name || row.source || row.mode)} · ${html(executionLabel(row))}</div>
         </div>
         <span class="decision-action ${html(action)}">${html(decision.action || "UNKNOWN")}</span>
@@ -2139,7 +2180,7 @@ function renderDecisionDetail(row) {
       order
         ? detailKvGrid([
             ["方向", order.side],
-            ["代码", order.code],
+            ["标的", securityLabelText(order.code, row)],
             ["数量", order.qty],
             ["价格", order.price],
             ["类型", order.order_type],
@@ -2242,7 +2283,7 @@ function renderDecisions(rows) {
         <article class="decision-item ${index === state.selectedDecisionIndex ? "selected" : ""}">
           <div class="decision-top">
             <div>
-              <div class="decision-code">${html(decision.code || "NONE")}</div>
+              <div class="decision-code decision-security">${renderSecurityLabel(decision.code || "NONE", row)}</div>
               <div class="decision-time">${html(fmtTime(row.timestamp || row.ts))} · ${html(portfolio?.name || row.source || row.mode)}</div>
             </div>
             <div class="decision-badges">

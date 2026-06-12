@@ -1528,6 +1528,30 @@ tr:last-child td {
   font-weight: 760;
 }
 
+.decision-security {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.decision-security .security-name {
+  color: var(--text);
+  font-weight: 780;
+}
+
+.decision-security .security-symbol {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.decision-security .security-symbol.only {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 760;
+}
+
 .decision-time,
 .decision-meta,
 .learning-note {
@@ -1664,6 +1688,15 @@ tr:last-child td {
 }
 
 .detail-title {
+  font-size: 18px;
+  font-weight: 780;
+}
+
+.detail-title.decision-security .security-symbol {
+  font-size: 14px;
+}
+
+.detail-title.decision-security .security-symbol.only {
   font-size: 18px;
   font-weight: 780;
 }
