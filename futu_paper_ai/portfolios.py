@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from math import ceil
+from sqlite3 import Connection
 from typing import Any
 
 from .config import AppConfig, STATE_ROOT
@@ -11,10 +14,12 @@ from .market_data import market_session_payload
 from .models import OrderIntent, infer_market
 from .news_signals import normalize_ticker
 from .risk import RiskEngine, risk_config_with_overrides
-from .storage import atomic_write_text, file_lock
+from .storage import atomic_write_text
 
 
 PORTFOLIOS_PATH = STATE_ROOT / "portfolios.json"
+PORTFOLIOS_DB_PATH = STATE_ROOT / "portfolios.db"
+PORTFOLIOS_DB_KEY = "portfolios"
 DEFAULT_PORTFOLIO_ID = "default"
 APPLY_MODES = {"observe", "manual", "auto"}
 PORTFOLIO_KINDS = {"paper", "actual"}
@@ -659,7 +664,25 @@ def _normalize_store(payload: dict[str, Any]) -> dict[str, Any]:
     return {"active_id": active_id, "portfolios": portfolios}
 
 
-def _load_store_unlocked() -> dict[str, Any]:
+def _connect_portfolios_db() -> Connection:
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(PORTFOLIOS_DB_PATH, timeout=15)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=15000")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    return conn
+
+
+def _load_legacy_json_store() -> dict[str, Any]:
     if not PORTFOLIOS_PATH.exists():
         return _default_store()
     try:
@@ -669,21 +692,78 @@ def _load_store_unlocked() -> dict[str, Any]:
     return _normalize_store(payload if isinstance(payload, dict) else {})
 
 
-def _save_portfolios_unlocked(store: dict[str, Any]) -> dict[str, Any]:
+def _write_json_snapshot(store: dict[str, Any]) -> None:
+    try:
+        atomic_write_text(PORTFOLIOS_PATH, json.dumps(store, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_store_from_db(conn: Connection) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT value FROM portfolio_state WHERE key = ?",
+        (PORTFOLIOS_DB_KEY,),
+    ).fetchone()
+    if row is None:
+        store = _load_legacy_json_store()
+        _save_store_to_db(conn, store)
+        return store
+    try:
+        payload = json.loads(str(row["value"]))
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    return _normalize_store(payload if isinstance(payload, dict) else {})
+
+
+def _save_store_to_db(conn: Connection, store: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_store(store)
-    STATE_ROOT.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(PORTFOLIOS_PATH, json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    conn.execute(
+        """
+        INSERT INTO portfolio_state (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """,
+        (PORTFOLIOS_DB_KEY, json.dumps(normalized, ensure_ascii=False, separators=(",", ":")), _now()),
+    )
+    _write_json_snapshot(normalized)
     return normalized
 
 
+@contextmanager
+def _portfolio_transaction() -> Any:
+    conn = _connect_portfolios_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        store = _load_store_from_db(conn)
+        yield conn, store
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _load_store_unlocked() -> dict[str, Any]:
+    with _connect_portfolios_db() as conn:
+        return _load_store_from_db(conn)
+
+
+def _save_portfolios_unlocked(store: dict[str, Any], conn: Connection | None = None) -> dict[str, Any]:
+    if conn is not None:
+        return _save_store_to_db(conn, store)
+    with _portfolio_transaction() as (tx_conn, _store):
+        return _save_store_to_db(tx_conn, store)
+
+
 def _load_store() -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH, exclusive=False):
-        return _load_store_unlocked()
+    return _load_store_unlocked()
 
 
 def save_portfolios(store: dict[str, Any]) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        return _save_portfolios_unlocked(store)
+    return _save_portfolios_unlocked(store)
 
 
 def load_portfolios() -> dict[str, Any]:
@@ -700,8 +780,7 @@ def get_portfolio(portfolio_id: str | None = None) -> dict[str, Any]:
 
 
 def create_portfolio(name: str, *, base_currency: str = "HKD", cash: float = 0.0) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         now = _now()
         portfolio = {
             "id": _new_id(),
@@ -737,12 +816,11 @@ def create_portfolio(name: str, *, base_currency: str = "HKD", cash: float = 0.0
         }
         store["portfolios"].append(portfolio)
         store["active_id"] = portfolio["id"]
-        return _save_portfolios_unlocked(store)
+        return _save_portfolios_unlocked(store, conn)
 
 
 def delete_portfolio(portfolio_id: str) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         portfolio_id = str(portfolio_id or "")
         if len(store["portfolios"]) <= 1:
             raise ValueError("cannot delete the last portfolio")
@@ -751,22 +829,20 @@ def delete_portfolio(portfolio_id: str) -> dict[str, Any]:
             raise ValueError("portfolio not found")
         if store["active_id"] == portfolio_id:
             store["active_id"] = store["portfolios"][0]["id"]
-        return _save_portfolios_unlocked(store)
+        return _save_portfolios_unlocked(store, conn)
 
 
 def set_active_portfolio(portfolio_id: str) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         portfolio_ids = {item["id"] for item in store["portfolios"]}
         if portfolio_id not in portfolio_ids:
             raise ValueError("portfolio not found")
         store["active_id"] = portfolio_id
-        return _save_portfolios_unlocked(store)
+        return _save_portfolios_unlocked(store, conn)
 
 
 def clone_portfolio(portfolio_id: str | None, *, name: str = "", apply_mode: str | None = None) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         source_id = str(portfolio_id or store["active_id"])
         source = next((item for item in store["portfolios"] if item["id"] == source_id), None)
         if not source:
@@ -808,7 +884,7 @@ def clone_portfolio(portfolio_id: str | None, *, name: str = "", apply_mode: str
         }
         store["portfolios"].append(clone)
         store["active_id"] = clone["id"]
-        return _save_portfolios_unlocked(store)
+        return _save_portfolios_unlocked(store, conn)
 
 
 def update_portfolio_settings(
@@ -824,8 +900,7 @@ def update_portfolio_settings(
     risk_overrides: dict[str, Any] | None = None,
     ai_loop_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         for portfolio in store["portfolios"]:
             if portfolio["id"] != target_id:
@@ -923,13 +998,12 @@ def update_portfolio_settings(
                 )
             portfolio["updated_at"] = _now()
             store["active_id"] = target_id
-            return _save_portfolios_unlocked(store)
+            return _save_portfolios_unlocked(store, conn)
     raise ValueError("portfolio not found")
 
 
 def record_futu_sync_order(portfolio_id: str | None, payload: dict[str, Any]) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         sync_order = _normalize_sync_order(payload)
         for portfolio in store["portfolios"]:
@@ -946,13 +1020,12 @@ def record_futu_sync_order(portfolio_id: str | None, payload: dict[str, Any]) ->
             orders.append(sync_order)
             portfolio["futu_sync_orders"] = orders[-500:]
             portfolio["updated_at"] = _now()
-            return _save_portfolios_unlocked(store)
+            return _save_portfolios_unlocked(store, conn)
     raise ValueError("portfolio not found")
 
 
 def update_futu_sync_order(portfolio_id: str | None, order_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         order_id = str(order_id or "")
         for portfolio in store["portfolios"]:
@@ -970,14 +1043,13 @@ def update_futu_sync_order(portfolio_id: str | None, order_id: str, updates: dic
                 order["updated_at"] = _now()
                 portfolio["futu_sync_orders"] = [_normalize_sync_order(item) for item in orders][-500:]
                 portfolio["updated_at"] = _now()
-                return _save_portfolios_unlocked(store)
+                return _save_portfolios_unlocked(store, conn)
             raise ValueError("sync order not found")
     raise ValueError("portfolio not found")
 
 
 def update_portfolio_cash(portfolio_id: str | None, cash: Any, *, currency: str | None = None) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         for portfolio in store["portfolios"]:
             if portfolio["id"] != target_id:
@@ -1012,7 +1084,7 @@ def update_portfolio_cash(portfolio_id: str | None, cash: Any, *, currency: str 
                 )
             portfolio["updated_at"] = _now()
             store["active_id"] = target_id
-            return _save_portfolios_unlocked(store)
+            return _save_portfolios_unlocked(store, conn)
     raise ValueError("portfolio not found")
 
 
@@ -1023,8 +1095,7 @@ def update_portfolio_fx_rates(portfolio_id: str | None, fx_to_hkd: dict[str, Any
     if _num(next_rates.get("USD"), 0) <= 0:
         raise ValueError("USD/HKD rate must be greater than 0")
 
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         for portfolio in store["portfolios"]:
             if portfolio["id"] != target_id:
@@ -1059,13 +1130,12 @@ def update_portfolio_fx_rates(portfolio_id: str | None, fx_to_hkd: dict[str, Any
                 },
             )
             portfolio["updated_at"] = _now()
-            return _save_portfolios_unlocked(store)
+            return _save_portfolios_unlocked(store, conn)
     raise ValueError("portfolio not found")
 
 
 def upsert_position(portfolio_id: str | None, payload: dict[str, Any]) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         for portfolio in store["portfolios"]:
             if portfolio["id"] != target_id:
@@ -1093,13 +1163,12 @@ def upsert_position(portfolio_id: str | None, payload: dict[str, Any]) -> dict[s
             )
             portfolio["updated_at"] = _now()
             store["active_id"] = target_id
-            return _save_portfolios_unlocked(store)
+            return _save_portfolios_unlocked(store, conn)
     raise ValueError("portfolio not found")
 
 
 def delete_position(portfolio_id: str | None, code: str) -> dict[str, Any]:
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         normalized_code = _normalize_code(code)
         for portfolio in store["portfolios"]:
@@ -1122,7 +1191,7 @@ def delete_position(portfolio_id: str | None, code: str) -> dict[str, Any]:
                 },
             )
             portfolio["updated_at"] = _now()
-            return _save_portfolios_unlocked(store)
+            return _save_portfolios_unlocked(store, conn)
     raise ValueError("portfolio not found")
 
 
@@ -1138,8 +1207,9 @@ def apply_order_to_portfolio(
     fx_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     intent = OrderIntent.from_dict(order_payload)
-    with file_lock(PORTFOLIOS_PATH):
-        store = _load_store_unlocked()
+    source_key = str(source or "").strip().lower()
+    base_risk_config = AppConfig.from_env().risk if source_key != "user_trade" else None
+    with _portfolio_transaction() as (conn, store):
         target_id = str(portfolio_id or store["active_id"])
         for portfolio in store["portfolios"]:
             if portfolio["id"] != target_id:
@@ -1155,7 +1225,6 @@ def apply_order_to_portfolio(
                     "message": "Decision has already been applied to this local portfolio.",
                 }
 
-            source_key = str(source or "").strip().lower()
             if source_key not in {"user_trade", "futu_sync"}:
                 session = market_session_payload(intent.market)
                 if not session["can_trade"]:
@@ -1190,8 +1259,8 @@ def apply_order_to_portfolio(
             fx_detail: dict[str, Any] = {}
             net_cash_amount = 0.0
 
-            if source_key != "user_trade":
-                risk_config = risk_config_with_overrides(AppConfig.from_env().risk, portfolio.get("risk_overrides"))
+            if source_key != "user_trade" and base_risk_config is not None:
+                risk_config = risk_config_with_overrides(base_risk_config, portfolio.get("risk_overrides"))
                 risk_decision = RiskEngine(risk_config).validate_portfolio(
                     intent,
                     portfolio,
@@ -1323,7 +1392,7 @@ def apply_order_to_portfolio(
             portfolio["positions"] = sorted(positions, key=lambda item: item.get("code", ""))
             portfolio["trades"] = trades[-500:]
             portfolio["updated_at"] = _now()
-            _save_portfolios_unlocked(store)
+            _save_portfolios_unlocked(store, conn)
             return {
                 "ok": True,
                 "status": "applied",

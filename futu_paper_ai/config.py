@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -12,6 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATE_ROOT = PROJECT_ROOT / "data" / "state"
 RISK_CONFIG_PATH = STATE_ROOT / "risk_config.json"
 PORTFOLIOS_PATH = STATE_ROOT / "portfolios.json"
+PORTFOLIOS_DB_PATH = STATE_ROOT / "portfolios.db"
+PORTFOLIOS_DB_KEY = "portfolios"
 WATCHLIST_DEFAULT_PATH = PROJECT_ROOT / "data" / "watchlist.default.json"
 WATCHLIST_USER_PATH = STATE_ROOT / "watchlist.user.json"
 
@@ -96,7 +99,7 @@ def _codes_from_watchlist(path: Path) -> set[str]:
 
 
 def _codes_from_portfolios(path: Path = PORTFOLIOS_PATH) -> set[str]:
-    payload = _read_json(path, locked=True)
+    payload = _read_portfolios_payload(path)
     if not isinstance(payload, dict):
         return set()
     codes: set[str] = set()
@@ -110,6 +113,26 @@ def _codes_from_portfolios(path: Path = PORTFOLIOS_PATH) -> set[str]:
             if code:
                 codes.add(code)
     return codes
+
+
+def _read_portfolios_payload(path: Path = PORTFOLIOS_PATH) -> object:
+    if PORTFOLIOS_DB_PATH.exists():
+        conn = None
+        try:
+            conn = sqlite3.connect(f"file:{PORTFOLIOS_DB_PATH}?mode=ro", uri=True, timeout=2)
+            conn.execute("PRAGMA busy_timeout=2000")
+            row = conn.execute(
+                "SELECT value FROM portfolio_state WHERE key = ?",
+                (PORTFOLIOS_DB_KEY,),
+            ).fetchone()
+            if row is not None:
+                return json.loads(str(row[0]))
+        except (OSError, sqlite3.Error, json.JSONDecodeError):
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+    return _read_json(path)
 
 
 def _auto_allowed_codes() -> set[str]:
