@@ -190,6 +190,7 @@ function renderExtendedSessionPill(extendedSession, { compact = false } = {}) {
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
+    cache: "no-store",
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -1031,7 +1032,7 @@ function renderPortfolioOperations(portfolio) {
     .join("");
 
   target.querySelectorAll("[data-trade-delete]").forEach((button) => {
-    button.addEventListener("click", () => deletePortfolioTrade(button.dataset.tradeDelete, button.dataset.tradeSummary || ""));
+    button.addEventListener("click", () => deletePortfolioTrade(button.dataset.tradeDelete, button.dataset.tradeSummary || "", button));
   });
 }
 
@@ -2784,6 +2785,7 @@ async function recordPortfolioTrade() {
   if (!state.activePortfolioId) return;
   const portfolio = activePortfolio();
   const order = portfolioTradePayload();
+  const button = el("recordPortfolioTrade");
   if (!order.code || order.qty <= 0 || order.price <= 0) {
     el("portfolioTradeCode").focus();
     return;
@@ -2793,6 +2795,8 @@ async function recordPortfolioTrade() {
     if (!ok) return;
   }
   try {
+    button.disabled = true;
+    button.textContent = portfolio?.futu_sync_enabled ? "提交中..." : "记录中...";
     const payload = await api("/api/portfolios/trade", {
       method: "POST",
       body: JSON.stringify({
@@ -2805,11 +2809,14 @@ async function recordPortfolioTrade() {
     el("portfolioTradeQty").value = "1";
     el("portfolioTradePrice").value = "1";
     el("portfolioTradeReason").value = "";
-    renderPortfolios(payload.portfolio_payload || payload);
+    await refreshPortfolios({ silent: true });
     await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
+  } finally {
+    button.disabled = false;
+    renderPortfolioTradeAction(activePortfolio());
   }
 }
 
@@ -2842,22 +2849,31 @@ async function deletePortfolioPosition(code) {
   }
 }
 
-async function deletePortfolioTrade(tradeId, summary) {
+async function deletePortfolioTrade(tradeId, summary, button = null) {
   if (!state.activePortfolioId || !tradeId) return;
   const ok = window.confirm(
     `撤销本人交易记录：${summary || tradeId}？\n\n系统会反向调整现金和持仓，并保留一条撤销审计记录。`
   );
   if (!ok) return;
   try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "撤销中...";
+    }
     const payload = await api("/api/portfolios/trade/delete", {
       method: "POST",
       body: JSON.stringify({ portfolio_id: state.activePortfolioId, trade_id: tradeId }),
     });
-    renderPortfolios(payload);
+    await refreshPortfolios({ silent: true });
     await refreshEvaluation();
     showOutput(payload);
   } catch (err) {
     showOutput(err);
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = "撤销记录";
+    }
   }
 }
 
