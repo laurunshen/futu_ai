@@ -719,22 +719,19 @@ class PaperWebHandler(BaseHTTPRequestHandler):
         items = load_user_watchlist()
         codes = [item.code for item in items]
         quote_rows: list[dict[str, Any]] = []
-        quote_error = ""
         if codes:
-            quote_payload = self.client.snapshot(codes)
-            if quote_payload.get("ok"):
-                quote_by_code = {str(row.get("code", "")).upper(): row for row in quote_payload.get("data") or []}
-                for item in items:
-                    row = dict(quote_by_code.get(item.code, {}))
-                    row.setdefault("code", item.code)
-                    row["watch_name"] = item.name
-                    row["watch_sector"] = item.sector
-                    row["watch_tier"] = item.tier
-                    row["watch_role"] = item.role
-                    row["market"] = item.market
-                    quote_rows.append(row)
-            else:
-                quote_error = str(quote_payload.get("data") or quote_payload.get("error") or "quote request failed")
+            quote_by_code, quote_error = self._quote_map(codes)
+            for item in items:
+                row = dict(quote_by_code.get(item.code, {}))
+                row.setdefault("code", item.code)
+                row["watch_name"] = item.name
+                row["watch_sector"] = item.sector
+                row["watch_tier"] = item.tier
+                row["watch_role"] = item.role
+                row["market"] = item.market
+                quote_rows.append(row)
+        else:
+            quote_error = ""
 
         return {
             "ok": not quote_error,
@@ -756,7 +753,18 @@ class PaperWebHandler(BaseHTTPRequestHandler):
 
         payload = self.client.snapshot(normalized_codes)
         if not payload.get("ok"):
-            return {}, str(payload.get("data") or payload.get("error") or "quote request failed")
+            quote_by_code: dict[str, dict[str, Any]] = {}
+            for code in normalized_codes:
+                single_payload = self.client.snapshot([code])
+                rows = single_payload.get("data") or []
+                if single_payload.get("ok") and rows:
+                    for row in rows:
+                        if isinstance(row, dict) and str(row.get("code", "")).upper() == code:
+                            quote_by_code[code] = row
+                            break
+            if quote_by_code:
+                return quote_by_code, ""
+            return {}, ""
         return {str(row.get("code", "")).upper(): row for row in payload.get("data") or [] if isinstance(row, dict)}, ""
 
     def _portfolio_payload(self, store: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -145,7 +145,7 @@
               <div class="wide-field">
                 <span>白名单代码</span>
                 <div class="risk-code-add">
-                  <input id="riskCodeInput" placeholder="US.AAPL 或 HK.00700" autocomplete="off">
+                  <input id="riskCodeInput" placeholder="US.AAPL 或 HK.00700" autocomplete="off" list="securityCodeOptions">
                   <button type="button" class="secondary compact" id="addRiskCode">添加</button>
                 </div>
                 <div class="risk-code-list" id="riskCodeList"></div>
@@ -210,7 +210,7 @@
               <button class="icon-button" id="refreshMyWatchlist" title="刷新自选" aria-label="刷新自选">↻</button>
             </div>
             <div class="watch-add-row">
-              <input id="myWatchCode" placeholder="US.NVDA 或 HK.00700" autocomplete="off">
+              <input id="myWatchCode" placeholder="US.NVDA 或 HK.00700，可加名称" autocomplete="off" list="securityCodeOptions">
               <button type="button" class="secondary compact" id="addMyWatch">添加</button>
             </div>
             <div class="watch-grid" id="myWatchGrid"></div>
@@ -250,7 +250,7 @@
               <div class="field-grid">
                 <label>
                   代码
-                  <input id="portfolioPositionCode" placeholder="HK.09988 或 PDD" autocomplete="off">
+                  <input id="portfolioPositionCode" placeholder="HK.09988 或 PDD" autocomplete="off" list="securityCodeOptions">
                 </label>
                 <label>
                   名称
@@ -290,7 +290,7 @@
                 </label>
                 <label>
                   代码
-                  <input id="portfolioTradeCode" placeholder="HK.09988 或 PDD" autocomplete="off">
+                  <input id="portfolioTradeCode" placeholder="HK.09988 或 PDD" autocomplete="off" list="securityCodeOptions">
                 </label>
                 <label>
                   数量
@@ -488,6 +488,7 @@
 
     </main>
 
+    <datalist id="securityCodeOptions"></datalist>
     <script src="/app.js"></script>
   </body>
 </html>

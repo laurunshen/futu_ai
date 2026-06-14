@@ -398,6 +398,7 @@ def _normalize_trade(payload: dict[str, Any]) -> dict[str, Any]:
         "source": str(payload.get("source") or "manual"),
         "side": str(payload.get("side") or "").upper(),
         "code": str(payload.get("code") or "").upper(),
+        "name": str(payload.get("name") or "").strip(),
         "qty": _num(payload.get("qty"), 0),
         "price": _num(payload.get("price"), 0),
         "currency": str(payload.get("currency") or "").upper(),
@@ -503,6 +504,7 @@ def _operation_from_trade(trade: dict[str, Any]) -> dict[str, Any]:
             "decision_id": trade.get("decision_id"),
             "trade_id": trade.get("id"),
             "payload": {
+                "name": trade.get("name"),
                 "reason": trade.get("reason"),
                 "cash_effects": trade.get("cash_effects"),
                 "fx": trade.get("fx"),
@@ -1382,6 +1384,7 @@ def apply_order_to_portfolio(
             cash_by_currency.setdefault(currency, 0.0)
             positions = [dict(position) for position in portfolio.get("positions", [])]
             existing = next((position for position in positions if position.get("code") == intent.code), None)
+            security_name = str(order_payload.get("name") or "").strip()
             notional = round(intent.notional, 4)
             fee_payload = _trade_fee(intent.market, intent.side, intent.qty, notional)
             fees = _num(fee_payload.get("total"), 0)
@@ -1449,6 +1452,8 @@ def apply_order_to_portfolio(
                     next_cost = ((old_qty * old_cost) + cost_basis) / next_qty if next_qty > 0 else intent.price
                     existing["qty"] = round(next_qty, 4)
                     existing["cost_price"] = round(next_cost, 4)
+                    if security_name and not str(existing.get("name") or "").strip():
+                        existing["name"] = security_name
                     existing["updated_at"] = _now()
                 else:
                     default_note = "本人交易记录" if source_key == "user_trade" else "AI applied local trade"
@@ -1456,6 +1461,7 @@ def apply_order_to_portfolio(
                         _normalize_position(
                             {
                                 "code": intent.code,
+                                "name": security_name,
                                 "qty": intent.qty,
                                 "cost_price": round(cost_basis / intent.qty, 4) if intent.qty > 0 else intent.price,
                                 "currency": currency,
@@ -1493,6 +1499,7 @@ def apply_order_to_portfolio(
                 "source": str(source or "manual"),
                 "side": intent.side,
                 "code": intent.code,
+                "name": security_name,
                 "qty": round(intent.qty, 4),
                 "price": round(intent.price, 4),
                 "currency": currency,

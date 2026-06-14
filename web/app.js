@@ -354,12 +354,13 @@ async function refreshNewsSignals({ silent = false } = {}) {
 
 async function addMyWatch() {
   const codeInput = el("myWatchCode");
-  const code = codeInput.value.trim().toUpperCase();
+  const parsed = parseSecurityInput(codeInput.value);
+  const code = parsed.code;
   if (!code) return;
   try {
     const payload = await api("/api/my-watchlist/add", {
       method: "POST",
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, name: parsed.name || knownSecurityName(code) }),
     });
     codeInput.value = "";
     renderMyWatchlist(payload);
@@ -418,6 +419,7 @@ function renderMyWatchlist(payload) {
       .map((row) => [normalizedCode(row.code), cleanSecurityName(row.name || row.watch_name, row.code)])
       .filter(([code, name]) => code && name)
   );
+  renderSecurityCodeOptions();
 
   if (!rows.length) {
     grid.innerHTML = `<div class="empty">No watchlist symbols</div>`;
@@ -642,6 +644,7 @@ function renderPortfolios(payload) {
   renderChatPortfolioOptions();
   renderDecisionPortfolioOptions();
   renderEvaluationPortfolioOptions();
+  renderSecurityCodeOptions();
 }
 
 function renderPortfolioDetails(portfolio, quoteError = "") {
@@ -1598,10 +1601,87 @@ function normalizeRiskCode(value) {
   if (!text) return "";
   const hk = text.match(/^HK\.?(\d{1,5})$/);
   if (hk) return `HK.${hk[1].padStart(5, "0")}`;
+  const hkSuffix = text.match(/^(\d{1,5})\.HK$/);
+  if (hkSuffix) return `HK.${hkSuffix[1].padStart(5, "0")}`;
+  const sh = text.match(/^SH\.?(\d{1,6})$/) || text.match(/^(\d{1,6})\.SH$/);
+  if (sh) return `SH.${sh[1].padStart(6, "0")}`;
+  const sz = text.match(/^SZ\.?(\d{1,6})$/) || text.match(/^(\d{1,6})\.SZ$/);
+  if (sz) return `SZ.${sz[1].padStart(6, "0")}`;
   const us = text.match(/^US\.?([A-Z][A-Z0-9.\-]{0,9})$/);
   if (us) return `US.${us[1]}`;
   if (/^[A-Z][A-Z0-9.\-]{0,9}$/.test(text)) return `US.${text}`;
   return text;
+}
+
+function parseSecurityInput(value) {
+  const text = String(value || "").trim();
+  if (!text) return { code: "", name: "" };
+  const [rawCode, ...nameParts] = text.split(/\s+/);
+  return {
+    code: normalizeRiskCode(rawCode),
+    name: nameParts.join(" ").trim(),
+  };
+}
+
+function knownSecurityName(code) {
+  const target = normalizeRiskCode(code);
+  if (!target) return "";
+  const watchName = cleanSecurityName(state.watchNameByCode.get(target), target);
+  if (watchName) return watchName;
+  for (const portfolio of state.portfolios || []) {
+    for (const position of portfolio.positions || []) {
+      if (normalizeRiskCode(position.code) !== target) continue;
+      const name = cleanSecurityName(position.name || position.note, target);
+      if (name) return name;
+    }
+    for (const trade of portfolio.trades || []) {
+      if (normalizeRiskCode(trade.code) !== target) continue;
+      const name = cleanSecurityName(trade.name, target);
+      if (name) return name;
+    }
+  }
+  return "";
+}
+
+function securityOptionRows() {
+  const rows = new Map();
+  const add = (code, name = "") => {
+    const normalized = normalizeRiskCode(code);
+    if (!normalized) return;
+    const cleanName = cleanSecurityName(name, normalized);
+    if (!rows.has(normalized) || (!rows.get(normalized) && cleanName)) {
+      rows.set(normalized, cleanName);
+    }
+  };
+  state.riskAllowedCodes.forEach((code) => add(code));
+  state.watchNameByCode.forEach((name, code) => add(code, name));
+  (state.portfolios || []).forEach((portfolio) => {
+    (portfolio.positions || []).forEach((position) => add(position.code, position.name || position.note));
+    (portfolio.trades || []).forEach((trade) => add(trade.code, trade.name));
+  });
+  return [...rows.entries()]
+    .map(([code, name]) => ({ code, name }))
+    .sort((a, b) => a.code.localeCompare(b.code));
+}
+
+function renderSecurityCodeOptions() {
+  const list = el("securityCodeOptions");
+  if (!list) return;
+  list.innerHTML = securityOptionRows()
+    .map((row) => `<option value="${html(row.code)}"${row.name ? ` label="${html(row.name)}"` : ""}></option>`)
+    .join("");
+}
+
+function normalizeCodeInput(input, nameInput = null) {
+  if (!input) return "";
+  const parsed = parseSecurityInput(input.value);
+  if (!parsed.code) return "";
+  input.value = parsed.code;
+  if (nameInput && !nameInput.value.trim()) {
+    const name = parsed.name || knownSecurityName(parsed.code);
+    if (name) nameInput.value = name;
+  }
+  return parsed.code;
 }
 
 function renderRiskCodeList() {
@@ -1630,13 +1710,14 @@ function renderRiskCodeList() {
 
 function addRiskCode() {
   const input = el("riskCodeInput");
-  const code = normalizeRiskCode(input.value);
+  const code = parseSecurityInput(input.value).code;
   if (!code) return;
   if (!state.riskAllowedCodes.includes(code)) {
     state.riskAllowedCodes = [...state.riskAllowedCodes, code].sort();
   }
   input.value = "";
   renderRiskCodeList();
+  renderSecurityCodeOptions();
 }
 
 function renderRiskEditor(config) {
@@ -1647,6 +1728,7 @@ function renderRiskEditor(config) {
   el("riskAllowMarketOrders").checked = Boolean(risk.allow_market_orders);
   state.riskAllowedCodes = [...(risk.allowed_codes || [])].map(normalizeRiskCode).filter(Boolean).sort();
   renderRiskCodeList();
+  renderSecurityCodeOptions();
   el("riskMaxOrderUS").value = risk.max_order_value?.US ?? "";
   el("riskMaxOrderHK").value = risk.max_order_value?.HK ?? "";
   el("riskMaxQtyUS").value = risk.max_qty?.US ?? "";
@@ -2737,9 +2819,10 @@ async function cloneActivePortfolio(mode) {
 }
 
 function portfolioPositionPayload() {
+  const parsed = parseSecurityInput(el("portfolioPositionCode").value);
   return {
-    code: normalizeRiskCode(el("portfolioPositionCode").value),
-    name: el("portfolioPositionName").value.trim(),
+    code: parsed.code,
+    name: el("portfolioPositionName").value.trim() || parsed.name || knownSecurityName(parsed.code),
     qty: Number(el("portfolioPositionQty").value || 0),
     cost_price: Number(el("portfolioPositionCost").value || 0),
     currency: el("portfolioPositionCurrency").value,
@@ -2772,8 +2855,10 @@ async function savePortfolioPosition() {
 }
 
 function portfolioTradePayload() {
+  const parsed = parseSecurityInput(el("portfolioTradeCode").value);
   return {
-    code: normalizeRiskCode(el("portfolioTradeCode").value),
+    code: parsed.code,
+    name: parsed.name || knownSecurityName(parsed.code),
     side: el("portfolioTradeSide").value,
     qty: Number(el("portfolioTradeQty").value || 0),
     price: Number(el("portfolioTradePrice").value || 0),
@@ -2922,6 +3007,10 @@ function bindButtons() {
       event.preventDefault();
       savePortfolioPosition();
     }
+  });
+  ["change", "blur"].forEach((eventName) => {
+    el("portfolioPositionCode").addEventListener(eventName, () => normalizeCodeInput(el("portfolioPositionCode"), el("portfolioPositionName")));
+    el("riskCodeInput").addEventListener(eventName, () => normalizeCodeInput(el("riskCodeInput")));
   });
   el("portfolioTradeCode").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
