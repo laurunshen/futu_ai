@@ -881,12 +881,17 @@ function renderPortfolioPositions(portfolio) {
     .map((row) => {
       const plRatio = Number(row.pl_ratio);
       const cls = changeClass(plRatio);
+      const displayName = cleanSecurityName(
+        row.name || row.quote?.name || row.quote?.stock_name || row.quote?.security_name || knownSecurityName(row.code),
+        row.code
+      );
+      const subtitle = displayName ? [row.code, row.market].filter(Boolean).join(" · ") : (row.note || row.market || "");
       return `
         <article class="portfolio-position">
           <div class="portfolio-position-main">
             <div>
-              <div class="portfolio-position-code">${html(row.code)}</div>
-              <div class="portfolio-position-name">${html(row.name || row.note || row.market)}</div>
+              <div class="portfolio-position-code">${html(displayName || row.code)}</div>
+              <div class="portfolio-position-name">${html(subtitle)}</div>
             </div>
             <div class="portfolio-position-price">
               <span>${html(row.last_price ?? "-")}</span>

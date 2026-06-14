@@ -808,6 +808,13 @@ class PaperWebHandler(BaseHTTPRequestHandler):
                 if position.get("code")
             }
         )
+        name_by_code: dict[str, str] = {}
+        try:
+            for item in [*load_watchlist(), *load_user_watchlist()]:
+                if item.name:
+                    name_by_code.setdefault(item.code, item.name)
+        except Exception:
+            name_by_code = {}
         quote_by_code, quote_error = self._quote_map(codes)
         portfolios: list[dict[str, Any]] = []
         for portfolio in store.get("portfolios", []):
@@ -830,6 +837,15 @@ class PaperWebHandler(BaseHTTPRequestHandler):
             for position in portfolio.get("positions", []):
                 row = dict(position)
                 quote = dict(quote_by_code.get(str(row.get("code", "")).upper(), {}))
+                quote_name = str(
+                    quote.get("name")
+                    or quote.get("stock_name")
+                    or quote.get("security_name")
+                    or quote.get("stock_full_name")
+                    or ""
+                ).strip()
+                if not str(row.get("name") or "").strip():
+                    row["name"] = quote_name or name_by_code.get(str(row.get("code", "")).upper(), "")
                 qty = _float(row.get("qty"))
                 cost_price = _float(row.get("cost_price"))
                 last_price = _float(quote.get("last_price") or quote.get("nominal_price") or quote.get("bid_price"))
